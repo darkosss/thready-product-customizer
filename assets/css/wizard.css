@@ -834,3 +834,25 @@
     align-items: center;
     justify-content: center;
 }
+
+/* ── Section divider within a step ─────────────────────────────────── */
+.wiz-section { }
+
+.wiz-section-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--wiz-text);
+    margin: 0 0 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--wiz-border);
+}
+
+/* ── Single print image button ──────────────────────────────────────── */
+.wiz-print-upload-controls .button {
+    font-size: 12px !important;
+    padding: 4px 12px !important;
+    height: auto !important;
+}
+
+/* Remove old two-button row styles no longer needed */
+.wiz-print-btn-row { display: none; }

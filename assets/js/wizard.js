@@ -62,19 +62,15 @@
     function buildDynamicSteps() {
         var steps = [ { id: 'setup', type: 'setup', label: 'Setup', sublabel: '' } ];
 
+        // One step per type — colors + sizes merged
         S.tipSlugs.forEach( function ( t ) {
             var tip = getTip( t );
-            steps.push( { id: 'colors-' + t, type: 'colors', tipSlug: t, tipName: tip.name, label: tip.name, sublabel: 'Colors' } );
+            steps.push( { id: 'type-' + t, type: 'type_config', tipSlug: t, tipName: tip.name, label: tip.name, sublabel: '' } );
         } );
 
-        S.tipSlugs.forEach( function ( t ) {
-            var tip = getTip( t );
-            steps.push( { id: 'sizes-' + t, type: 'sizes', tipSlug: t, tipName: tip.name, label: tip.name, sublabel: 'Sizes' } );
-        } );
-
-        steps.push( { id: 'pricing',     type: 'pricing',     label: 'Pricing',  sublabel: '' } );
-        steps.push( { id: 'positioning', type: 'positioning', label: 'Design',   sublabel: 'Position' } );
-        steps.push( { id: 'review',      type: 'review',      label: 'Review',   sublabel: '' } );
+        steps.push( { id: 'pricing',     type: 'pricing',     label: 'Pricing', sublabel: '' } );
+        steps.push( { id: 'positioning', type: 'positioning', label: 'Design',  sublabel: '' } );
+        steps.push( { id: 'review',      type: 'review',      label: 'Review',  sublabel: '' } );
 
         S.dynamicSteps = steps;
     }
@@ -120,12 +116,11 @@
 
         // Render step content
         switch ( step.type ) {
-            case 'setup':       renderSetup();                              break;
-            case 'colors':      renderColors( step.tipSlug, step.tipName ); break;
-            case 'sizes':       renderSizes(  step.tipSlug, step.tipName ); break;
-            case 'pricing':     renderPricing();                            break;
-            case 'positioning': renderPositioning();                        break;
-            case 'review':      renderReview();                             break;
+            case 'setup':       renderSetup();                                  break;
+            case 'type_config': renderTypeConfig( step.tipSlug, step.tipName ); break;
+            case 'pricing':     renderPricing();                                break;
+            case 'positioning': renderPositioning();                            break;
+            case 'review':      renderReview();                                 break;
         }
 
         $btnBack.toggle( index > 0 );
@@ -176,20 +171,17 @@
                 rebuildStepIndicator();
                 return true;
 
-            case 'colors': {
+            case 'type_config': {
                 collectColors( step.tipSlug );
+                collectSizes( step.tipSlug );
                 var sel = Object.keys( S.tipColors[ step.tipSlug ] || {} )
                     .filter( function ( b ) { return S.tipColors[ step.tipSlug ][ b ].selected; } );
                 if ( ! sel.length ) return err( 'Select at least one color for ' + step.tipName + '.' );
-                return true;
-            }
-
-            case 'sizes':
-                collectSizes( step.tipSlug );
                 if ( ! S.tipSizes[ step.tipSlug ] || ! S.tipSizes[ step.tipSlug ].length ) {
                     return err( 'Select at least one size for ' + step.tipName + '.' );
                 }
                 return true;
+            }
 
             case 'pricing':
                 collectPricing();
@@ -303,21 +295,9 @@
             $( this ).closest( '.wiz-check-card' ).toggleClass( 'is-checked', this.checked );
         } );
 
-        // File input trigger
-        $body.on( 'click.wiz', '.print-file-btn', function () {
-            $( '#file-' + $( this ).data( 'side' ) ).trigger( 'click' );
-        } );
-
-        // File chosen → upload via AJAX
-        $body.on( 'change.wiz', '.print-file-input', function () {
-            var side = $( this ).data( 'side' );
-            if ( this.files && this.files[0] ) uploadPrint( side, this.files[0] );
-        } );
-
-        // Media library picker
-        $body.on( 'click.wiz', '.print-library-btn', function () {
-            var side = $( this ).data( 'side' );
-            openMediaPicker( side );
+        // Single button → open WP media library (handles both select + upload)
+        $body.on( 'click.wiz', '.print-media-btn', function () {
+            openMediaPicker( $( this ).data( 'side' ) );
         } );
 
         // Remove
@@ -337,7 +317,7 @@
         h += '</div>';
         h += '<div class="wiz-print-upload-controls">';
 
-        // Preview
+        // Preview thumbnail
         h += '<div class="wiz-print-preview ' + ( imgId ? 'has-image' : '' ) + '" id="prev-' + side + '">';
         if ( imgId && thumbUrl ) {
             h += '<img src="' + esc( thumbUrl ) + '" alt="">';
@@ -347,24 +327,23 @@
         }
         h += '</div>';
 
-        // Buttons row
-        h += '<div class="wiz-print-btn-row">';
-        h += '<input type="file" class="print-file-input" id="file-' + side + '" data-side="' + side + '" accept="image/png" style="display:none">';
-        h += '<button type="button" class="button print-file-btn" data-side="' + side + '">📁 Upload PNG</button>';
-        h += '<button type="button" class="button print-library-btn" data-side="' + side + '">🖼 Media Library</button>';
-        h += '</div>';
+        // Single button — opens WP media library (select or upload from within)
+        h += '<button type="button" class="button print-media-btn" data-side="' + side + '">';
+        h += imgId ? 'Change Image' : 'Select / Upload';
+        h += '</button>';
 
-        h += '<span class="print-upload-status" id="sts-' + side + '"></span>';
         h += '</div></div>';
         return h;
     }
 
-    // ── WP Media picker for print images ──────────────────────────────────────
+    // ── WP Media picker (select or upload — single entry point) ───────────────
 
     function openMediaPicker( side ) {
+        var titles = { front: 'Front Print Image', light: 'Light Print Image', back: 'Back Print Image' };
+
         if ( ! mediaFrames[ side ] ) {
             mediaFrames[ side ] = wp.media( {
-                title    : 'Select ' + side.charAt(0).toUpperCase() + side.slice(1) + ' Print Image',
+                title    : titles[ side ] || 'Select Print Image',
                 button   : { text: 'Use this image' },
                 multiple : false,
                 library  : { type: 'image' },
@@ -372,35 +351,14 @@
         }
 
         var frame = mediaFrames[ side ];
-
         frame.off( 'select' );
         frame.on( 'select', function () {
-            var attachment = frame.state().get( 'selection' ).first().toJSON();
-            var thumbUrl   = attachment.sizes && attachment.sizes.thumbnail
-                             ? attachment.sizes.thumbnail.url
-                             : attachment.url;
-            setPrintImage( side, attachment.id, attachment.url, thumbUrl );
+            var att      = frame.state().get( 'selection' ).first().toJSON();
+            var thumbUrl = att.sizes && att.sizes.thumbnail ? att.sizes.thumbnail.url : att.url;
+            setPrintImage( side, att.id, att.url, thumbUrl );
         } );
 
         frame.open();
-    }
-
-    function uploadPrint( side, file ) {
-        var $sts = $( '#sts-' + side );
-        $sts.text( 'Uploading…' );
-
-        var fd = new FormData();
-        fd.append( 'action',      'thready_wizard_upload_print' );
-        fd.append( '_ajax_nonce', d.nonce );
-        fd.append( 'file',        file );
-
-        $.ajax( { url: d.ajax_url, type: 'POST', data: fd, processData: false, contentType: false } )
-        .done( function ( res ) {
-            if ( ! res.success ) { $sts.text( ( res.data && res.data.message ) || 'Upload failed' ); return; }
-            setPrintImage( side, res.data.attachment_id, res.data.url, res.data.thumb_url );
-            $sts.text( '' );
-        } )
-        .fail( function () { $sts.text( 'Upload failed.' ); } );
     }
 
     function setPrintImage( side, id, url, thumbUrl ) {
@@ -412,6 +370,7 @@
             .addClass( 'has-image' )
             .html( '<img src="' + esc( thumbUrl ) + '" alt="">'
                  + '<button type="button" class="print-remove-btn" data-side="' + side + '" title="Remove">✕</button>' );
+        $( '.print-media-btn[data-side="' + side + '"]' ).text( 'Change Image' );
     }
 
     function removePrint( side ) {
@@ -419,9 +378,9 @@
         if ( side === 'light' ) { S.printLightId = 0; S.printLightUrl = ''; S.printLightThumb = ''; }
         if ( side === 'back'  ) { S.printBackId  = 0; S.printBackUrl  = ''; S.printBackThumb  = ''; }
 
-        $( '#prev-' + side )
-            .removeClass( 'has-image' )
+        $( '#prev-' + side ).removeClass( 'has-image' )
             .html( '<span class="dashicons dashicons-format-image"></span>' );
+        $( '.print-media-btn[data-side="' + side + '"]' ).text( 'Select / Upload' );
     }
 
     // ── COLORS (one step per type) ────────────────────────────────────────────
@@ -581,6 +540,154 @@
     function varCountText( colorCount, sizeCount, tipName ) {
         return '<strong>' + colorCount + '</strong> ' + esc( tipName )
              + ' variations × <strong>' + sizeCount + '</strong> available sizes each';
+    }
+
+    // ── TYPE CONFIG (colors + sizes merged) ──────────────────────────────────
+
+    function renderTypeConfig( tipSlug, tipName ) {
+        var tipColorState = S.tipColors[ tipSlug ] || {};
+        var selectedSizes = S.tipSizes[ tipSlug ]  || [];
+        var hasLight      = S.printLightId > 0;
+
+        var h = '<div class="wizard-step">';
+        h += '<h2 class="step-title">' + esc( tipName ) + '</h2>';
+
+        // ── Colors ──
+        h += '<div class="wiz-section">';
+        h += '<h3 class="wiz-section-title">Colors</h3>';
+
+        if ( hasLight ) {
+            h += '<p class="wiz-info-note">💡 Check <strong>Light print</strong> on colors where the lighter design should be used instead.</p>';
+        }
+
+        h += '<div class="wiz-quick-actions">';
+        h += '<button type="button" class="button button-small boja-all-btn">All</button>';
+        h += '<button type="button" class="button button-small boja-none-btn">None</button>';
+        h += '</div>';
+
+        h += '<div class="wiz-color-grid-full">';
+        ( d.bojas || [] ).forEach( function ( b ) {
+            var colorState = tipColorState[ b.slug ] || { selected: false, lightPrint: false };
+            var chk        = colorState.selected;
+            var lp         = colorState.lightPrint;
+            var mk         = ( d.mockup_map || {} )[ tipSlug + '|' + b.slug ] || {};
+
+            h += '<div class="wiz-color-card-wrap ' + ( chk ? 'is-selected' : '' ) + '">';
+            h += '<label class="wiz-color-card ' + ( chk ? 'is-checked' : '' ) + ( ! mk.has_front ? ' no-mockup' : '' ) + '">';
+            h += '<input type="checkbox" class="boja-cb" data-tip="' + esc( tipSlug ) + '" value="' + esc( b.slug ) + '" ' + ( chk ? 'checked' : '' ) + '>';
+
+            if ( b.hex ) h += '<span class="wiz-swatch" style="background:' + esc( b.hex ) + ';"></span>';
+            else         h += '<span class="wiz-swatch swatch-empty"></span>';
+
+            if ( mk.front_thumb ) {
+                h += '<span class="wiz-mockup-thumb"><img src="' + esc( mk.front_thumb ) + '" alt=""></span>';
+            } else {
+                h += '<span class="wiz-mockup-thumb wiz-mockup-missing" title="No base image in Mockup Library">?</span>';
+            }
+
+            h += '<span class="wiz-color-name">' + esc( b.name ) + '</span>';
+            if ( ! mk.has_front ) h += '<span class="wiz-no-mockup-badge">!</span>';
+            h += '</label>';
+
+            if ( hasLight ) {
+                h += '<label class="wiz-light-print-label" id="lp-wrap-' + esc( tipSlug ) + '-' + esc( b.slug ) + '" '
+                   + 'style="' + ( chk ? '' : 'display:none;' ) + '">';
+                h += '<input type="checkbox" id="lp-' + esc( tipSlug ) + '-' + esc( b.slug ) + '" ' + ( lp ? 'checked' : '' ) + '>';
+                h += ' Light print';
+                h += '</label>';
+            }
+
+            h += '</div>';
+        } );
+        h += '</div>';
+
+        var missingCount = ( d.bojas || [] ).filter( function ( b ) {
+            return ! ( ( d.mockup_map || {} )[ tipSlug + '|' + b.slug ] || {} ).has_front;
+        } ).length;
+        if ( missingCount ) {
+            h += '<p class="wiz-warn-inline" style="margin-top:8px;">⚠ ' + missingCount
+               + ' color(s) missing base images. <a href="' + esc( d.mockup_lib_url ) + '" target="_blank">Add in Mockup Library →</a></p>';
+        }
+
+        h += '</div>'; // .wiz-section
+
+        // ── Sizes ──
+        h += '<div class="wiz-section" style="margin-top:24px;">';
+        h += '<h3 class="wiz-section-title">Available Sizes</h3>';
+        h += '<p class="wiz-hint" style="margin-bottom:10px;">Sizes are stored as options per variation — not as separate variations.</p>';
+
+        h += '<div class="wiz-quick-actions">';
+        h += '<button type="button" class="button button-small size-all-btn">All</button>';
+        h += '<button type="button" class="button button-small size-none-btn">None</button>';
+        h += '</div>';
+
+        h += '<div class="wiz-checkbox-grid wiz-size-grid">';
+        ( d.velicinas || [] ).forEach( function ( v ) {
+            var chk = selectedSizes.indexOf( v.slug ) !== -1;
+            h += '<label class="wiz-check-card wiz-size-card ' + ( chk ? 'is-checked' : '' ) + '">';
+            h += '<input type="checkbox" class="size-cb" value="' + esc( v.slug ) + '" ' + ( chk ? 'checked' : '' ) + '>';
+            h += '<span class="check-card-name">' + esc( v.name ) + '</span>';
+            h += '</label>';
+        } );
+        h += '</div>';
+
+        h += '<p class="wiz-variation-count" id="var-count">' + getVarCountText( tipSlug ) + '</p>';
+        h += '</div>';
+
+        h += '</div>';
+        $body.html( h );
+
+        // Color events
+        $body.on( 'change.wiz', '.boja-cb', function () {
+            var slug    = $( this ).val();
+            var checked = this.checked;
+            $( this ).closest( '.wiz-color-card' ).toggleClass( 'is-checked', checked );
+            $( this ).closest( '.wiz-color-card-wrap' ).toggleClass( 'is-selected', checked );
+            if ( hasLight ) $( '#lp-wrap-' + tipSlug + '-' + slug ).toggle( checked );
+            updateVarCount( tipSlug );
+        } );
+
+        $body.on( 'click.wiz', '.boja-all-btn', function () {
+            $body.find( '.boja-cb' ).prop( 'checked', true )
+                .closest( '.wiz-color-card' ).addClass( 'is-checked' );
+            $body.find( '.wiz-color-card-wrap' ).addClass( 'is-selected' );
+            if ( hasLight ) $body.find( '[id^="lp-wrap-"]' ).show();
+            updateVarCount( tipSlug );
+        } );
+
+        $body.on( 'click.wiz', '.boja-none-btn', function () {
+            $body.find( '.boja-cb' ).prop( 'checked', false )
+                .closest( '.wiz-color-card' ).removeClass( 'is-checked' );
+            $body.find( '.wiz-color-card-wrap' ).removeClass( 'is-selected' );
+            if ( hasLight ) $body.find( '[id^="lp-wrap-"]' ).hide();
+            updateVarCount( tipSlug );
+        } );
+
+        // Size events
+        $body.on( 'change.wiz', '.size-cb', function () {
+            $( this ).closest( '.wiz-check-card' ).toggleClass( 'is-checked', this.checked );
+            updateVarCount( tipSlug );
+        } );
+
+        $body.on( 'click.wiz', '.size-all-btn', function () {
+            $body.find( '.size-cb' ).prop( 'checked', true ).closest( '.wiz-check-card' ).addClass( 'is-checked' );
+            updateVarCount( tipSlug );
+        } );
+
+        $body.on( 'click.wiz', '.size-none-btn', function () {
+            $body.find( '.size-cb' ).prop( 'checked', false ).closest( '.wiz-check-card' ).removeClass( 'is-checked' );
+            updateVarCount( tipSlug );
+        } );
+    }
+
+    function getVarCountText( tipSlug ) {
+        var colorCount = $body.find( '.boja-cb:checked' ).length;
+        var sizeCount  = $body.find( '.size-cb:checked' ).length;
+        return '<strong>' + colorCount + '</strong> variations × <strong>' + sizeCount + '</strong> available sizes each';
+    }
+
+    function updateVarCount( tipSlug ) {
+        $( '#var-count' ).html( getVarCountText( tipSlug ) );
     }
 
     // ── PRICING ───────────────────────────────────────────────────────────────

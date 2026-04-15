@@ -189,7 +189,7 @@
         var $btn    = $( this );
         var $result = $( '#thready-scan-result' );
 
-        $btn.prop( 'disabled', true ).text( '⟳ Scanning…' );
+        $btn.prop( 'disabled', true ).text( "Scanning…" );
         $result.text( '' ).css( 'color', '' );
 
         $.post( cfg.ajax_url, {
@@ -197,7 +197,7 @@
             _ajax_nonce : cfg.nonce,
         } )
         .done( function ( res ) {
-            $btn.prop( 'disabled', false ).text( '📂 Scan & Import' );
+            $btn.prop( 'disabled', false ).text( 'Scan & Import' );
 
             if ( res.success ) {
                 $result.css( 'color', '#1a7340' ).text( '✓ ' + res.data.message );
@@ -223,7 +223,7 @@
             }
         } )
         .fail( function () {
-            $btn.prop( 'disabled', false ).text( '📂 Scan & Import' );
+            $btn.prop( 'disabled', false ).text( 'Scan & Import' );
             $result.css( 'color', '#cf2929' ).text( 'Request failed' );
         } );
     } );

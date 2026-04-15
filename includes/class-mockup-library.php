@@ -345,7 +345,7 @@ class Thready_Mockup_Library {
                 </p>
                 <div class="thready-scan-bar">
                     <button type="button" class="button button-primary" id="thready-scan-btn">
-                        <?php esc_html_e( '📂 Scan & Import', 'thready-product-customizer' ); ?>
+                        <?php esc_html_e( 'Scan & Import', 'thready-product-customizer' ); ?>
                     </button>
                     <span id="thready-scan-result"></span>
                 </div>
@@ -458,6 +458,11 @@ class Thready_Mockup_Library {
         if ( $image_id && ! wp_attachment_is_image( $image_id ) )
             wp_send_json_error( [ 'message' => 'Invalid image' ] );
 
+        // Auto-rename the attachment to the correct mockup convention
+        if ( $image_id ) {
+            self::auto_rename_attachment( $image_id, $tip_slug, $boja_slug, $slot );
+        }
+
         if ( $slot === 'front' ) self::save( $tip_slug, $boja_slug, $image_id, null );
         else                     self::save( $tip_slug, $boja_slug, null, $image_id );
 
@@ -512,6 +517,62 @@ class Thready_Mockup_Library {
             'skipped'  => $result['skipped'],
             'errors'   => $result['errors'],
         ] );
+    }
+
+    // -------------------------------------------------------------------------
+    // Auto-rename
+    // -------------------------------------------------------------------------
+
+    /**
+     * Rename an attachment file to the mockup naming convention:
+     *   {tip-slug}-{boja-slug}-{front|back}.{ext}
+     *
+     * Updates the physical file, postmeta, and attachment title.
+     */
+    private static function auto_rename_attachment( $attachment_id, $tip_slug, $boja_slug, $slot ) {
+        $filepath = get_attached_file( $attachment_id );
+        if ( ! $filepath || ! file_exists( $filepath ) ) return;
+
+        $upload_dir   = wp_upload_dir();
+        $ext          = strtolower( pathinfo( $filepath, PATHINFO_EXTENSION ) );
+        $new_filename = $tip_slug . '-' . $boja_slug . '-' . $slot . '.' . $ext;
+
+        // Ensure thready-mockups directory exists
+        $mockup_dir = trailingslashit( $upload_dir['basedir'] ) . self::SCAN_DIR;
+        if ( ! file_exists( $mockup_dir ) ) {
+            wp_mkdir_p( $mockup_dir );
+        }
+
+        $new_filepath = trailingslashit( $mockup_dir ) . $new_filename;
+        $new_relative = self::SCAN_DIR . '/' . $new_filename;
+
+        // Already in the right place with the right name — skip
+        if ( $filepath === $new_filepath ) return;
+
+        // Copy to thready-mockups (keep original in place for WP media library integrity,
+        // but point the attachment to the new location)
+        if ( ! copy( $filepath, $new_filepath ) ) {
+            // Fallback: try rename if copy fails (same filesystem)
+            if ( ! rename( $filepath, $new_filepath ) ) {
+                error_log( "Thready Mockup: could not copy/rename $filepath to $new_filepath" );
+                return;
+            }
+        }
+
+        // Update attachment to point to new file
+        update_post_meta( $attachment_id, '_wp_attached_file', $new_relative );
+
+        // Update attachment title
+        wp_update_post( [
+            'ID'         => $attachment_id,
+            'post_title' => sanitize_file_name( $tip_slug . '-' . $boja_slug . '-' . $slot ),
+            'post_name'  => sanitize_title( $tip_slug . '-' . $boja_slug . '-' . $slot ),
+        ] );
+
+        // Regenerate metadata pointing to new file
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+        $metadata = wp_generate_attachment_metadata( $attachment_id, $new_filepath );
+        wp_update_attachment_metadata( $attachment_id, $metadata );
     }
 
     private static function notice( $type, $message ) {
