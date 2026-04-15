@@ -34,6 +34,7 @@ require_once THREADY_PC_PATH . 'includes/class-frontend-handler.php';
 require_once THREADY_PC_PATH . 'includes/class-mockup-library.php';
 require_once THREADY_PC_PATH . 'includes/class-variation-factory.php';
 require_once THREADY_PC_PATH . 'includes/class-product-wizard.php';
+require_once THREADY_PC_PATH . 'includes/class-live-preview.php';
 
 // Couple Mode (admin toggle)
 require_once THREADY_PC_PATH . 'includes/class-couple-mode-admin.php';
@@ -64,6 +65,7 @@ add_action('plugins_loaded', function () {
     // New system
     Thready_Mockup_Library::init();
     Thready_Product_Wizard::init();
+    Thready_Live_Preview::init();
 
     new Thready_Couple_Mode_Admin();
     Thready_Couple_Mode_Variations_Admin::init();

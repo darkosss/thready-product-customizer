@@ -1,0 +1,63 @@
+/* ==========================================================================
+   Thready Live Preview — Frontend CSS
+   Canvas loading overlay + front/back toggle button
+   ========================================================================== */
+
+/* ── Loading state on gallery ───────────────────────────────────────── */
+.thready-canvas-loading {
+    position: relative;
+}
+
+.thready-canvas-loading::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(255, 255, 255, 0.55);
+    z-index: 10;
+    border-radius: inherit;
+    animation: thready-canvas-pulse 0.9s ease infinite alternate;
+    pointer-events: none;
+}
+
+@keyframes thready-canvas-pulse {
+    from { opacity: 0.3; }
+    to   { opacity: 0.8; }
+}
+
+/* ── Front / Back toggle ────────────────────────────────────────────── */
+.thready-view-toggle {
+    display: inline-flex;
+    gap: 0;
+    border: 1px solid #e0e0de;
+    border-radius: 6px;
+    overflow: hidden;
+    margin: 10px 0 0;
+}
+
+.tvt-btn {
+    padding: 6px 18px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .3px;
+    text-transform: uppercase;
+    background: #f8f8f7;
+    border: none;
+    cursor: pointer;
+    color: #646970;
+    transition: background .12s, color .12s;
+    line-height: 1.4;
+}
+
+.tvt-btn + .tvt-btn {
+    border-left: 1px solid #e0e0de;
+}
+
+.tvt-btn:hover {
+    background: #f0f0ee;
+    color: #1e1e1e;
+}
+
+.tvt-btn.tvt-active {
+    background: #1a1a18;
+    color: #fff;
+}
