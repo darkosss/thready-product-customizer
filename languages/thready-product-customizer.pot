@@ -1,0 +1,111 @@
+# Copyright (C) 2025 Thready
+# This file is distributed under the same license as the Thready Product Customizer plugin.
+msgid ""
+msgstr ""
+"Project-Id-Version: Thready Product Customizer 1.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2025-01-09 12:00+0000\n"
+"PO-Revision-Date: \n"
+"Last-Translator: Darko <darko1981@gmail.com>\n"
+"Language-Team: \n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: includes/class-admin-settings.php:45
+msgid "Print Design Image"
+msgstr ""
+
+#: includes/class-admin-settings.php:46
+msgid "Upload/Change"
+msgstr ""
+
+#: includes/class-admin-settings.php:47
+msgid "Remove"
+msgstr ""
+
+#: includes/class-admin-settings.php:48
+msgid "Upload a transparent PNG of the print design"
+msgstr ""
+
+#: includes/class-admin-settings.php:53
+msgid "Default Print Settings"
+msgstr ""
+
+#: includes/class-admin-settings.php:54
+msgid "Used when no variation is selected"
+msgstr ""
+
+#: includes/class-admin-settings.php:58
+msgid "Position X"
+msgstr ""
+
+#: includes/class-admin-settings.php:62
+msgid "Percentage from left (-100 to 100). Negative values position outside left edge."
+msgstr ""
+
+#: includes/class-admin-settings.php:67
+msgid "Position Y"
+msgstr ""
+
+#: includes/class-admin-settings.php:71
+msgid "Percentage from top (-100 to 100). Negative values position outside top edge."
+msgstr ""
+
+#: includes/class-admin-settings.php:76
+msgid "Width"
+msgstr ""
+
+#: includes/class-admin-settings.php:80
+msgid "Percentage of base image width (1-100)"
+msgstr ""
+
+#: includes/class-admin-settings.php:149
+msgid "Print Position X"
+msgstr ""
+
+#: includes/class-admin-settings.php:153
+msgid "Print Position Y"
+msgstr ""
+
+#: includes/class-admin-settings.php:157
+msgid "Print Width"
+msgstr ""
+
+#: includes/class-admin-settings.php:161
+msgid "Available Sizes"
+msgstr ""
+
+#: includes/class-admin-settings.php:165
+msgid "Select which sizes are available for this variation"
+msgstr ""
+
+#: includes/class-admin-settings.php:166
+msgid "No sizes found. Please add sizes to the size attribute."
+msgstr ""
+
+#: includes/class-frontend-handler.php:42
+msgid "Size"
+msgstr ""
+
+#: includes/class-frontend-handler.php:43
+msgid "Select size"
+msgstr ""
+
+#: assets/js/frontend.js:38
+msgid "Please select a size"
+msgstr ""
+
+#: assets/js/frontend.js:45
+msgid "Please select a variation first"
+msgstr ""
+
+#: assets/js/frontend.js:48
+msgid "No sizes available for this variation"
+msgstr ""
+
+#: assets/js/frontend.js:51
+msgid "Please select a size"
+msgstr ""
