@@ -129,7 +129,7 @@ class Thready_Live_Preview {
             'design_ver'  => (int) get_post_meta( $product_id, Thready_Variation_Factory::META_DESIGN_VERSION, true ),
             'ajax_url'    => admin_url( 'admin-ajax.php' ),
             'nonce'       => wp_create_nonce( 'thready_canvas_nonce' ),
-            'tax_boja'    => 'pa_boja',
+            'tax_boja'    => THREADY_TAX_BOJA,
         ];
     }
 
@@ -190,7 +190,7 @@ class Thready_Live_Preview {
         ];
 
         // Add boja slug so canvas JS can look up the right mockup image
-        $data['thready_boja_slug'] = $variation->get_attribute( 'pa_boja' );
+        $data['thready_boja_slug'] = $variation->get_attribute( THREADY_TAX_BOJA );
 
         return $data;
     }
@@ -241,7 +241,7 @@ class Thready_Live_Preview {
         if ( ! self::is_canvas_product( $parent_id ) ) return $cart_item_data;
         if ( ! function_exists( 'imagecreatetruecolor' ) ) return $cart_item_data;
 
-        $boja_slug = $variation->get_attribute( 'pa_boja' );
+        $boja_slug = $variation->get_attribute( THREADY_TAX_BOJA );
         if ( ! $boja_slug ) return $cart_item_data;
 
         // Check if a valid cached image already exists for this design version
@@ -360,6 +360,7 @@ class Thready_Live_Preview {
      */
     private static function get_active_boja_slugs( $product_id ) {
         global $wpdb;
+        $meta_key = 'attribute_' . THREADY_TAX_BOJA;
         return $wpdb->get_col( $wpdb->prepare( "
             SELECT DISTINCT pm.meta_value
             FROM   {$wpdb->posts} p
@@ -368,10 +369,10 @@ class Thready_Live_Preview {
             WHERE  p.post_parent  = %d
             AND    p.post_type    = 'product_variation'
             AND    p.post_status != 'trash'
-            AND    pm.meta_key   = 'attribute_pa_boja'
+            AND    pm.meta_key   = %s
             AND    pm2.meta_key  = '_stock_status'
             AND    pm2.meta_value = 'instock'
             ORDER  BY pm.meta_value
-        ", $product_id ) );
+        ", $product_id, $meta_key ) );
     }
 }

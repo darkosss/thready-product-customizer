@@ -102,7 +102,7 @@ class Thready_Product_Wizard {
      */
     private static function build_js_data() {
         // pa_tip terms
-        $tip_terms = get_terms( [ 'taxonomy' => 'pa_tip', 'hide_empty' => false, 'orderby' => 'name' ] );
+        $tip_terms = get_terms( [ 'taxonomy' => THREADY_TAX_TIP, 'hide_empty' => false, 'orderby' => 'name' ] );
         $tips = [];
         if ( ! is_wp_error( $tip_terms ) ) {
             foreach ( $tip_terms as $t ) {
@@ -111,7 +111,7 @@ class Thready_Product_Wizard {
         }
 
         // pa_boja terms — include hex from WVS
-        $boja_terms = get_terms( [ 'taxonomy' => 'pa_boja', 'hide_empty' => false, 'orderby' => 'name' ] );
+        $boja_terms = get_terms( [ 'taxonomy' => THREADY_TAX_BOJA, 'hide_empty' => false, 'orderby' => 'name' ] );
         $bojas = [];
         if ( ! is_wp_error( $boja_terms ) ) {
             foreach ( $boja_terms as $t ) {
@@ -124,7 +124,7 @@ class Thready_Product_Wizard {
         }
 
         // pa_velicina terms
-        $velicina_terms = get_terms( [ 'taxonomy' => 'pa_velicina', 'hide_empty' => false, 'orderby' => 'name' ] );
+        $velicina_terms = get_terms( [ 'taxonomy' => THREADY_TAX_VELICINA, 'hide_empty' => false, 'orderby' => 'name' ] );
         $velicinas = [];
         if ( ! is_wp_error( $velicina_terms ) ) {
             foreach ( $velicina_terms as $t ) {
@@ -368,7 +368,7 @@ class Thready_Product_Wizard {
             if ( ! $tip_slug ) continue;
 
             // Get tip term name for product title
-            $tip_term     = get_term_by( 'slug', $tip_slug, 'pa_tip' );
+            $tip_term     = get_term_by( 'slug', $tip_slug, THREADY_TAX_TIP );
             $tip_name     = $tip_term ? $tip_term->name : ucfirst( $tip_slug );
             $product_name = $design_name . ' — ' . $tip_name;
 

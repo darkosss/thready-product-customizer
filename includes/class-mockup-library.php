@@ -259,8 +259,8 @@ class Thready_Mockup_Library {
     // -------------------------------------------------------------------------
 
     public static function render_page() {
-        $tip_terms = get_terms( [ 'taxonomy' => 'pa_tip',  'hide_empty' => false, 'orderby' => 'name' ] );
-        $boja_terms = get_terms( [ 'taxonomy' => 'pa_boja', 'hide_empty' => false, 'orderby' => 'name' ] );
+        $tip_terms = get_terms( [ 'taxonomy' => THREADY_TAX_TIP,  'hide_empty' => false, 'orderby' => 'name' ] );
+        $boja_terms = get_terms( [ 'taxonomy' => THREADY_TAX_BOJA, 'hide_empty' => false, 'orderby' => 'name' ] );
 
         if ( is_wp_error( $tip_terms ) || empty( $tip_terms ) ) {
             self::notice( 'warning', __( 'No product types (pa_tip) found. Add product type attributes in WooCommerce → Attributes first.', 'thready-product-customizer' ) );

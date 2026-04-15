@@ -34,9 +34,9 @@ class Thready_Variation_Factory {
     const META_POS_BACK       = '_thready_position_back';  // JSON {x,y,width}
 
     // WC attribute taxonomy slugs used across the plugin
-    const TAX_TIP      = 'pa_tip';
-    const TAX_BOJA     = 'pa_boja';
-    const TAX_VELICINA = 'pa_velicina';
+    
+    
+    
 
     // Batch size for variation inserts — keeps memory flat
     const BATCH_SIZE = 50;
@@ -246,7 +246,7 @@ class Thready_Variation_Factory {
         }
 
         // Verify color exists in taxonomy
-        if ( ! term_exists( $boja_slug, self::TAX_BOJA ) ) {
+        if ( ! term_exists( $boja_slug, THREADY_TAX_BOJA ) ) {
             return new WP_Error( 'thready_invalid_term', sprintf( __( 'Color "%s" not found.', 'thready-product-customizer' ), $boja_slug ) );
         }
 
@@ -315,7 +315,7 @@ class Thready_Variation_Factory {
             return new WP_Error( 'thready_invalid_product', __( 'Product not found.', 'thready-product-customizer' ) );
         }
 
-        if ( ! term_exists( $velicina_slug, self::TAX_VELICINA ) ) {
+        if ( ! term_exists( $velicina_slug, THREADY_TAX_VELICINA ) ) {
             return new WP_Error( 'thready_invalid_term', sprintf( __( 'Size "%s" not found.', 'thready-product-customizer' ), $velicina_slug ) );
         }
 
@@ -450,7 +450,7 @@ class Thready_Variation_Factory {
 
         if ( empty( $args['tip_slug'] ) ) {
             $errors[] = __( 'Product type (pa_tip) is required.', 'thready-product-customizer' );
-        } elseif ( ! term_exists( $args['tip_slug'], self::TAX_TIP ) ) {
+        } elseif ( ! term_exists( $args['tip_slug'], THREADY_TAX_TIP ) ) {
             $errors[] = sprintf( __( 'Product type "%s" not found.', 'thready-product-customizer' ), $args['tip_slug'] );
         }
 
@@ -484,8 +484,8 @@ class Thready_Variation_Factory {
         $attrs = [];
 
         $tax_map = [
-            self::TAX_BOJA     => $boja_slugs,
-            self::TAX_VELICINA => $velicina_slugs,
+            THREADY_TAX_BOJA     => $boja_slugs,
+            THREADY_TAX_VELICINA => $velicina_slugs,
         ];
 
         foreach ( $tax_map as $taxonomy => $slugs ) {
@@ -531,8 +531,8 @@ class Thready_Variation_Factory {
         $changed    = false;
 
         $additions = [
-            self::TAX_BOJA     => $new_boja,
-            self::TAX_VELICINA => $new_velicina,
+            THREADY_TAX_BOJA     => $new_boja,
+            THREADY_TAX_VELICINA => $new_velicina,
         ];
 
         foreach ( $additions as $taxonomy => $slugs ) {
@@ -664,8 +664,8 @@ class Thready_Variation_Factory {
         global $wpdb;
 
         // Resolve term slugs — WC stores them as slugs in variation meta
-        $boja_term     = get_term_by( 'slug', $boja_slug,     self::TAX_BOJA     );
-        $velicina_term = get_term_by( 'slug', $velicina_slug, self::TAX_VELICINA );
+        $boja_term     = get_term_by( 'slug', $boja_slug,     THREADY_TAX_BOJA     );
+        $velicina_term = get_term_by( 'slug', $velicina_slug, THREADY_TAX_VELICINA );
 
         if ( ! $boja_term || ! $velicina_term ) {
             error_log( "Thready Factory: term not found for $boja_slug / $velicina_slug" );
@@ -694,8 +694,8 @@ class Thready_Variation_Factory {
         if ( ! $var_id ) return false;
 
         // Attribute meta — WC reads these as 'attribute_pa_boja' etc.
-        add_post_meta( $var_id, 'attribute_' . self::TAX_BOJA,     $boja_slug );
-        add_post_meta( $var_id, 'attribute_' . self::TAX_VELICINA, $velicina_slug );
+        add_post_meta( $var_id, 'attribute_' . THREADY_TAX_BOJA,     $boja_slug );
+        add_post_meta( $var_id, 'attribute_' . THREADY_TAX_VELICINA, $velicina_slug );
 
         // Price meta
         add_post_meta( $var_id, '_price',         (string) $regular_price );
@@ -778,11 +778,11 @@ class Thready_Variation_Factory {
             AND    pm.meta_key   IN (%s, %s)
             GROUP  BY p.ID
         ",
-            'attribute_' . self::TAX_BOJA,
-            'attribute_' . self::TAX_VELICINA,
+            'attribute_' . THREADY_TAX_BOJA,
+            'attribute_' . THREADY_TAX_VELICINA,
             $product_id,
-            'attribute_' . self::TAX_BOJA,
-            'attribute_' . self::TAX_VELICINA
+            'attribute_' . THREADY_TAX_BOJA,
+            'attribute_' . THREADY_TAX_VELICINA
         ) );
 
         $map = [];
@@ -797,11 +797,11 @@ class Thready_Variation_Factory {
     // ── Active colors / sizes on a product ───────────────────────────────────
 
     private static function get_product_active_colors( $product_id ) {
-        return self::get_active_attribute_values( $product_id, self::TAX_BOJA );
+        return self::get_active_attribute_values( $product_id, THREADY_TAX_BOJA );
     }
 
     private static function get_product_sizes( $product_id ) {
-        return self::get_active_attribute_values( $product_id, self::TAX_VELICINA );
+        return self::get_active_attribute_values( $product_id, THREADY_TAX_VELICINA );
     }
 
     /**

@@ -24,6 +24,13 @@ define('THREADY_IMAGE_SIZES', [
     'thumbnail'     => [150, 150]   // Small images
 ]);
 
+// ── Attribute taxonomy slugs ───────────────────────────────────────────────
+// WooCommerce prepends 'pa_' to whatever slug you set in WC > Attributes.
+// Change these if your store uses different attribute slugs.
+define('THREADY_TAX_TIP',      'pa_tip-proizvoda'); // Product type
+define('THREADY_TAX_BOJA',     'pa_boja');          // Color
+define('THREADY_TAX_VELICINA', 'pa_velicina');      // Size
+
 // Include core files
 require_once THREADY_PC_PATH . 'includes/class-admin-settings.php';
 require_once THREADY_PC_PATH . 'includes/class-image-handler.php';
