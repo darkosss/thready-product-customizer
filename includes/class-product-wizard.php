@@ -302,7 +302,14 @@ class Thready_Product_Wizard {
             wp_send_json_error( [ 'message' => $product_id->get_error_message() ] );
         }
 
-        $var_count = (int) ( new WC_Product_Variable( $product_id ) )->get_available_variations( 'count' );
+        // Direct DB count — get_available_variations('count') uses cache and may
+        // return stale data immediately after bulk insert
+        global $wpdb;
+        $var_count = (int) $wpdb->get_var( $wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->posts}
+             WHERE post_parent = %d AND post_type = 'product_variation' AND post_status = 'publish'",
+            $product_id
+        ) );
 
         wp_send_json_success( [
             'product_id'      => $product_id,

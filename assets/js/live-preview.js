@@ -1,301 +1,239 @@
 /**
  * Thready Live Preview — live-preview.js
  *
- * Hooks into WooCommerce variation events and composites the print design
- * over the blank mockup image using HTML5 Canvas.
+ * Canvas compositor for products in canvas render mode.
+ * Works with multi-tip products: variations = pa_tip-proizvoda × pa_boja.
  *
- * Data contract (from threadyCanvas):
+ * threadyCanvas data shape:
  * {
- *   tip_slug    : string,
- *   print_front : string  (URL),
- *   print_back  : string  (URL),
- *   pos_front   : {x, y, width},
- *   pos_back    : {x, y, width}|null,
- *   mockups     : { [boja_slug]: { front: url, back: url } },
- *   has_back    : bool,
- *   tax_boja    : 'pa_boja',
+ *   print_front   : string  (URL)
+ *   print_light   : string  (URL, optional)
+ *   print_back    : string  (URL, optional)
+ *   tip_positions : { [tipSlug]: { front:{x,y,width}, back:{x,y,width}|null } }
+ *   mockups       : { "tip|boja": { front:url, back:url } }
+ *   has_back      : bool
+ *   has_light     : bool
+ *   tax_tip       : string  e.g. "pa_tip-proizvoda"
+ *   tax_boja      : string  e.g. "pa_boja"
  * }
- *
- * How it works
- * ------------
- * 1. On found_variation, read boja_slug from variation data
- * 2. Look up mockup URLs from threadyCanvas.mockups[boja_slug]
- * 3. Draw base image + print PNG on a hidden canvas
- * 4. Convert canvas to a blob URL and swap into the WC gallery
- * 5. On reset_data / hide_variation, restore original gallery state
- *
- * Gallery compatibility
- * ---------------------
- * Works with the standard WooCommerce gallery and Greenshift's
- * gspb-product-image-gallery (which your existing frontend.js already handles).
- * Injects into whichever gallery element is found.
  */
-
 /* global threadyCanvas, jQuery */
 (function ( $ ) {
     'use strict';
 
     var d = window.threadyCanvas;
-    if ( ! d ) return;  // Not a canvas product — bail immediately
+    if ( ! d ) return;
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Image cache — avoid re-compositing the same combination twice per session
-    // key: "boja|side"  value: blob URL or null
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Per-session canvas composite cache ───────────────────────────────────
+    var cache = {};
 
-    var compositeCache = {};
-
-    // Track current boja so we can detect actual changes
+    // Current state
+    var currentTip  = null;
     var currentBoja = null;
-    var currentView = 'front';  // 'front' | 'back'
+    var currentView = 'front';
 
-    // Original gallery state (captured once on init)
+    // Capture original gallery state once for reset
     var originalGalleryHTML = null;
 
-    // Hidden canvas used for all compositing
+    // Off-screen canvas
     var canvas = document.createElement( 'canvas' );
     var ctx    = canvas.getContext( '2d' );
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Gallery helpers
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Gallery helpers ───────────────────────────────────────────────────────
 
-    /**
-     * Find the main product image element — handles multiple gallery types.
-     */
-    function getGalleryImage() {
-        return (
-            $( '.woocommerce-product-gallery__image img' ).first() ||
-            $( '.gspb-product-image-gallery img' ).first()
-        );
+    function getGalleryImg() {
+        return $( '.woocommerce-product-gallery__image img, .gspb-product-image-gallery img' ).first();
     }
 
-    /**
-     * Get the gallery wrapper for spinner/loading state.
-     */
     function getGalleryWrap() {
-        return $( '.woocommerce-product-gallery__image' ).first()
-            .add( $( '.gspb-product-image-gallery' ).first() )
-            .first();
+        var $a = $( '.woocommerce-product-gallery__image' ).first();
+        var $b = $( '.gspb-product-image-gallery' ).first();
+        return $a.length ? $a : $b;
     }
 
-    function showLoading() {
-        getGalleryWrap().addClass( 'thready-canvas-loading' );
-    }
-
-    function hideLoading() {
-        getGalleryWrap().removeClass( 'thready-canvas-loading' );
-    }
-
-    /**
-     * Swap the gallery's <img> src to a new URL.
-     * Fades out → updates → fades in for a polished feel.
-     */
     function swapGalleryImage( url ) {
-        var $img = getGalleryImage();
-        if ( ! $img || ! $img.length ) return;
+        var $img = getGalleryImg();
+        if ( ! $img.length ) return;
 
-        $img.stop( true ).animate( { opacity: 0 }, 120, function () {
-            $img.attr( 'src', url ).attr( 'srcset', '' );
-
+        $img.stop( true ).animate( { opacity: 0 }, 100, function () {
+            $img.attr( { src: url, srcset: '' } );
+            $img.closest( 'a' ).attr( 'href', url );
             $img[0].onload = function () {
                 $img.animate( { opacity: 1 }, 150 );
-                hideLoading();
+                getGalleryWrap().removeClass( 'thready-canvas-loading' );
             };
-
-            // Also update the zoom / lightbox link if present
-            $img.closest( 'a' ).attr( 'href', url );
         } );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Compositing
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Image loading ─────────────────────────────────────────────────────────
 
-    /**
-     * Load an image with crossOrigin and return a Promise<HTMLImageElement>.
-     */
-    function loadImage( url ) {
+    function loadImg( url ) {
         return new Promise( function ( resolve, reject ) {
-            var img = new Image();
+            var img        = new Image();
             img.crossOrigin = 'anonymous';
             img.onload  = function () { resolve( img ); };
-            img.onerror = function () { reject( new Error( 'Failed to load: ' + url ) ); };
-            img.src = url + ( url.indexOf( '?' ) !== -1 ? '&' : '?' ) + '_t=' + Date.now();
+            img.onerror = function () { reject( new Error( 'Load failed: ' + url ) ); };
+            img.src     = url + ( url.indexOf( '?' ) !== -1 ? '&' : '?' ) + '_tc=' + Date.now();
         } );
     }
 
-    /**
-     * Composite base image + print PNG and return a blob URL.
-     * Mirrors the PHP GD positioning math exactly.
-     *
-     * @param  {string} baseUrl
-     * @param  {string} printUrl
-     * @param  {Object} pos     {x, y, width} — percentages
-     * @return {Promise<string>}  Blob URL of composited image
-     */
+    // ── Composite ─────────────────────────────────────────────────────────────
+
     function composite( baseUrl, printUrl, pos ) {
-        var cacheKey = baseUrl + '||' + printUrl + '||' + JSON.stringify( pos );
-        if ( compositeCache[ cacheKey ] ) {
-            return Promise.resolve( compositeCache[ cacheKey ] );
-        }
+        var key = baseUrl + '||' + printUrl + '||' + JSON.stringify( pos );
+        if ( cache[ key ] ) return Promise.resolve( cache[ key ] );
 
-        var promises = [ loadImage( baseUrl ) ];
-        if ( printUrl ) promises.push( loadImage( printUrl ) );
+        var loads = [ loadImg( baseUrl ) ];
+        if ( printUrl ) loads.push( loadImg( printUrl ) );
 
-        return Promise.all( promises ).then( function ( imgs ) {
+        return Promise.all( loads ).then( function ( imgs ) {
             var base  = imgs[0];
             var print = imgs[1] || null;
 
             canvas.width  = base.naturalWidth;
             canvas.height = base.naturalHeight;
-
             ctx.clearRect( 0, 0, canvas.width, canvas.height );
             ctx.drawImage( base, 0, 0 );
 
             if ( print && pos ) {
-                var targetW = Math.round( ( pos.width / 100 ) * canvas.width );
-                var targetH = Math.round( ( targetW * print.naturalHeight ) / print.naturalWidth );
-
-                var posX, posY;
-
-                // Mirror PHP GD: positive x = center-aligned, negative = adjusted
-                if ( pos.x > 0 ) {
-                    posX = Math.round( ( pos.x / 100 ) * canvas.width ) - Math.round( targetW / 2 );
-                } else {
-                    posX = Math.round( ( pos.x / 100 ) * canvas.width ) + Math.round( targetW / 2 );
-                }
-
-                posY = Math.round( ( pos.y / 100 ) * canvas.height );
-
-                ctx.drawImage( print, posX, posY, targetW, targetH );
+                var tw = Math.round( ( pos.width / 100 ) * canvas.width );
+                var th = Math.round( tw * print.naturalHeight / print.naturalWidth );
+                var px = pos.x > 0
+                    ? Math.round( ( pos.x / 100 ) * canvas.width ) - Math.round( tw / 2 )
+                    : Math.round( ( pos.x / 100 ) * canvas.width ) + Math.round( tw / 2 );
+                var py = Math.round( ( pos.y / 100 ) * canvas.height );
+                ctx.drawImage( print, px, py, tw, th );
             }
 
             return new Promise( function ( resolve ) {
                 canvas.toBlob( function ( blob ) {
-                    var blobUrl = URL.createObjectURL( blob );
-                    compositeCache[ cacheKey ] = blobUrl;
-                    resolve( blobUrl );
+                    var url = URL.createObjectURL( blob );
+                    cache[ key ] = url;
+                    resolve( url );
                 }, 'image/png' );
             } );
         } );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Front / back toggle
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Update view ───────────────────────────────────────────────────────────
 
-    function updateView( bojaSlug, view ) {
-        if ( ! bojaSlug ) return;
+    function updateView( tipSlug, bojaSlug, view, lightPrint ) {
+        if ( ! tipSlug || ! bojaSlug ) return;
 
-        var mockup = d.mockups[ bojaSlug ];
+        var mkKey  = tipSlug + '|' + bojaSlug;
+        var mockup = ( d.mockups || {} )[ mkKey ];
+
         if ( ! mockup ) {
-            hideLoading();
+            // No mockup image — show nothing, don't break the page
+            getGalleryWrap().removeClass( 'thready-canvas-loading' );
             return;
         }
 
-        var baseUrl  = view === 'back' && mockup.back ? mockup.back  : mockup.front;
-        var printUrl = view === 'back' ? d.print_back : d.print_front;
-        var pos      = view === 'back' ? d.pos_back   : d.pos_front;
-
+        var baseUrl = view === 'back' && mockup.back ? mockup.back : mockup.front;
         if ( ! baseUrl ) {
-            hideLoading();
+            getGalleryWrap().removeClass( 'thready-canvas-loading' );
             return;
         }
 
-        showLoading();
+        // Choose print image
+        var printUrl;
+        if ( view === 'back' ) {
+            printUrl = d.print_back || '';
+        } else if ( lightPrint && d.has_light ) {
+            printUrl = d.print_light || '';
+        } else {
+            printUrl = d.print_front || '';
+        }
 
-        composite( baseUrl, printUrl || null, pos || null )
+        // Get position for this tip
+        var tipPos   = ( d.tip_positions || {} )[ tipSlug ] || {};
+        var pos      = view === 'back' ? ( tipPos.back || null ) : ( tipPos.front || { x:50, y:25, width:50 } );
+
+        getGalleryWrap().addClass( 'thready-canvas-loading' );
+
+        composite( baseUrl, printUrl || null, pos )
             .then( function ( url ) { swapGalleryImage( url ); } )
-            .catch( function () { hideLoading(); } );
+            .catch( function () {
+                getGalleryWrap().removeClass( 'thready-canvas-loading' );
+            } );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Front/back toggle UI
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Front / Back toggle UI ────────────────────────────────────────────────
 
     function injectViewToggle() {
         if ( ! d.has_back ) return;
         if ( $( '.thready-view-toggle' ).length ) return;
 
-        var $gallery = getGalleryWrap();
-        if ( ! $gallery.length ) return;
+        var $wrap = getGalleryWrap();
+        if ( ! $wrap.length ) return;
 
         var html = '<div class="thready-view-toggle">'
                  + '<button type="button" class="tvt-btn tvt-active" data-view="front">Front</button>'
                  + '<button type="button" class="tvt-btn" data-view="back">Back</button>'
                  + '</div>';
 
-        $gallery.css( 'position', 'relative' ).after( html );
+        $wrap.after( html );
 
         $( document ).on( 'click', '.tvt-btn', function () {
-            var view = $( this ).data( 'view' );
+            currentView = $( this ).data( 'view' );
             $( '.tvt-btn' ).removeClass( 'tvt-active' );
             $( this ).addClass( 'tvt-active' );
-            currentView = view;
-            updateView( currentBoja, view );
+            updateView( currentTip, currentBoja, currentView, false );
         } );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // WooCommerce variation events
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── WooCommerce variation events ──────────────────────────────────────────
 
     $( document ).on( 'found_variation', function ( e, variation ) {
-        var bojaSlug = variation.thready_boja_slug || variation.attributes[ 'attribute_pa_boja' ] || '';
+        var tipSlug    = variation.thready_tip_slug  || '';
+        var bojaSlug   = variation.thready_boja_slug || '';
+        var lightPrint = !! variation.thready_light_print;
 
-        // Normalise — WC sometimes returns the term name, not the slug
+        // Normalise slugs
+        tipSlug  = tipSlug.toLowerCase().replace( /\s+/g, '-' );
         bojaSlug = bojaSlug.toLowerCase().replace( /\s+/g, '-' );
 
-        if ( bojaSlug === currentBoja ) return; // no change
-
+        currentTip  = tipSlug;
         currentBoja = bojaSlug;
-        currentView = 'front'; // reset to front on color change
+        currentView = 'front';
 
-        // Reset toggle buttons
+        // Reset toggle
         $( '.tvt-btn' ).removeClass( 'tvt-active' );
         $( '.tvt-btn[data-view="front"]' ).addClass( 'tvt-active' );
 
-        // Inject toggle if not yet present (first variation selection)
         injectViewToggle();
-
-        updateView( bojaSlug, 'front' );
+        updateView( tipSlug, bojaSlug, 'front', lightPrint );
     } );
 
     $( document ).on( 'reset_data hide_variation', function () {
+        currentTip  = null;
         currentBoja = null;
         currentView = 'front';
 
-        // Restore original gallery image if we captured it
         if ( originalGalleryHTML ) {
             getGalleryWrap().html( originalGalleryHTML );
         }
     } );
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Init
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Prevent WC default image swap for canvas products ────────────────────
+
+    $( document ).on( 'found_variation.wc-variation-form', function ( e, variation ) {
+        if ( variation.thready_boja_slug !== undefined ) {
+            // Replace image with blank so WC doesn't swap to variation image
+            variation.image = {
+                src: '', srcset: '', sizes: '', title: '', alt: '',
+                caption: '', full_src: '', gallery_thumbnail_src: '',
+            };
+        }
+    } );
+
+    // ── Init ─────────────────────────────────────────────────────────────────
 
     $( function () {
-        // Capture original gallery HTML for reset
         var $wrap = getGalleryWrap();
         if ( $wrap.length ) {
             originalGalleryHTML = $wrap.html();
         }
-
-        // Prevent WooCommerce's default variation image swap for canvas products
-        // WC binds to found_variation at DOMContentLoaded — we unbind image update
-        // by overriding the image on the data object (already done in PHP filter,
-        // but JS also reads data.image.src — we ensure it is blank)
-        $( document ).on( 'found_variation.wc-variation-form', function ( e, variation ) {
-            // If our canvas system is active, cancel WC's image swap
-            if ( variation.thready_boja_slug !== undefined ) {
-                variation.image = {
-                    src: '', srcset: '', sizes: '', title: '', alt: '',
-                    caption: '', full_src: '', gallery_thumbnail_src: '',
-                };
-            }
-        } );
     } );
 
 }( jQuery ) );
