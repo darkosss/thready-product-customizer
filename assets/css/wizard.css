@@ -701,3 +701,136 @@
     display: inline-block;
     margin-top: 12px;
 }
+
+/* ── Print upload rows (Step 1) ─────────────────────────────────────── */
+.wiz-print-uploads {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.wiz-print-upload-row {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 14px;
+    background: var(--wiz-bg);
+    border: 1px solid var(--wiz-border);
+    border-radius: 6px;
+}
+
+.wiz-print-upload-info {
+    flex: 1;
+}
+
+.wiz-print-upload-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--wiz-text);
+    margin-bottom: 2px;
+}
+
+.wiz-print-upload-controls {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+/* ── Full-width color grid (one per type) ───────────────────────────── */
+.wiz-color-grid-full {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.wiz-color-card-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+/* ── Light print checkbox ───────────────────────────────────────────── */
+.wiz-light-print-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--wiz-muted);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.wiz-light-print-label input {
+    margin: 0;
+    width: 12px;
+    height: 12px;
+}
+
+.wiz-color-card-wrap.is-selected .wiz-light-print-label {
+    color: var(--wiz-accent);
+    font-weight: 600;
+}
+
+/* ── Back mockup thumb ──────────────────────────────────────────────── */
+.wiz-mockup-back {
+    border: 1px solid #2271b1;
+    border-radius: 3px;
+}
+
+/* ── Info note ──────────────────────────────────────────────────────── */
+.wiz-info-note {
+    background: #f0f6fc;
+    border-left: 3px solid #2271b1;
+    padding: 8px 12px;
+    font-size: 12px;
+    color: #135e96;
+    border-radius: 0 4px 4px 0;
+    margin: 0 0 16px;
+}
+
+/* ── Dynamic step indicator — smaller labels ────────────────────────── */
+.wizard-step-indicator .step-label small {
+    display: block;
+    font-size: 9px;
+    font-weight: 400;
+    opacity: .75;
+    line-height: 1.2;
+}
+
+/* Shrink step nums on many steps */
+.wizard-steps:has(li:nth-child(8)) .wizard-step-indicator {
+    padding: 10px 10px 12px;
+    font-size: 11px;
+}
+
+/* ── Print upload button row ────────────────────────────────────────── */
+.wiz-print-btn-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.wiz-print-btn-row .button {
+    font-size: 12px !important;
+    padding: 4px 10px !important;
+    height: auto !important;
+}
+
+/* Back mockup indicator badge */
+.wiz-mockup-back-thumb {
+    font-size: 9px;
+    font-weight: 700;
+    color: #2271b1;
+    background: #f0f6fc;
+    border: 1px solid #2271b1;
+    border-radius: 3px;
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}

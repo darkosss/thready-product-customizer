@@ -1,176 +1,208 @@
 /**
  * Thready Product Wizard — wizard.js
  *
- * Manages 6-step product creation flow entirely client-side.
- * Communicates with the server only on final Create (AJAX).
+ * Dynamic multi-step wizard. Steps are built after Step 1 based on
+ * how many product types are selected.
  *
- * State shape
- * -----------
- * {
- *   step         : 1–6
- *   designName   : string
- *   selectedTips : [ {slug, name} ]
- *   tipConfigs   : {
- *     [tipSlug]: {
- *       bojas        : string[]   — selected boja slugs
- *       velicinas    : string[]   — selected velicina slugs
- *       regularPrice : number
- *       salePrice    : number|null
- *       posFront     : {x, y, width}
- *       posBack      : {x, y, width}|null
- *     }
- *   }
- *   printFrontId  : number
- *   printFrontUrl : string
- *   printBackId   : number
- *   printBackUrl  : string
- * }
+ * Flow:
+ *   Step 1   : Setup — name + types + print uploads (front, light, back)
+ *   Steps 2…N: Colors per type  (one step per type)
+ *   Steps …  : Sizes  per type  (one step per type)
+ *   Step     : Pricing          (all types, one step)
+ *   Step     : Positioning      (all types, front + back if back uploaded)
+ *   Last     : Review & Create
  */
-
-/* global threadyWizard, wp */
+/* global threadyWizard, wp, jQuery */
 (function ( $ ) {
     'use strict';
 
-    var cfg  = window.threadyWizard || {};
-    var i18n = cfg.i18n || {};
+    var d    = window.threadyWizard || {};
+    var i18n = d.i18n || {};
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // State
-    // ─────────────────────────────────────────────────────────────────────────
-
-    var state = {
-        step         : 1,
-        designName   : '',
-        selectedTips : [],
-        tipConfigs   : {},
-        printFrontId : 0,
-        printFrontUrl: '',
-        printBackId  : 0,
-        printBackUrl : '',
+    // ── State ─────────────────────────────────────────────────────────────────
+    var S = {
+        name         : '',
+        tipSlugs     : [],
+        printFrontId : 0, printFrontUrl : '', printFrontThumb : '',
+        printLightId : 0, printLightUrl : '', printLightThumb : '',
+        printBackId  : 0, printBackUrl  : '', printBackThumb  : '',
+        tipColors    : {},   // { tipSlug: { bojaSlug: { selected, lightPrint } } }
+        tipSizes     : {},   // { tipSlug: string[] }
+        tipPrices    : {},   // { tipSlug: { regular, sale } }
+        tipPositions : {},   // { tipSlug: { front, back|null } }
+        dynamicSteps : [],
+        stepIndex    : 0,
     };
 
-    // Pre-fill state if in edit mode
-    if ( cfg.edit_data ) {
-        var ed = cfg.edit_data;
-        state.designName    = ed.product_name || '';
-        state.printFrontId  = ed.print_front_id || 0;
-        state.printBackId   = ed.print_back_id  || 0;
-
-        if ( ed.tip_slug ) {
-            var tipTerm = ( cfg.tips || [] ).find( function (t) { return t.slug === ed.tip_slug; } );
-            if ( tipTerm ) {
-                state.selectedTips = [ tipTerm ];
-                state.tipConfigs[ ed.tip_slug ] = {
-                    bojas        : ed.colors || [],
-                    velicinas    : ed.sizes  || [],
-                    regularPrice : ed.regular_price || 0,
-                    salePrice    : ed.sale_price,
-                    posFront     : ed.pos_front || { x: 50, y: 25, width: 50 },
-                    posBack      : ed.pos_back  || null,
-                };
-            }
-        }
+    // Pre-fill from edit mode
+    if ( d.edit_data ) {
+        var ed       = d.edit_data;
+        S.name        = ed.product_name   || '';
+        S.tipSlugs    = ed.tips           || [];
+        S.tipPrices   = ed.tip_prices     || {};
+        S.tipPositions = ed.tip_positions || {};
+        S.printFrontId = ed.print_front_id || 0;
+        S.printLightId = ed.print_light_id || 0;
+        S.printBackId  = ed.print_back_id  || 0;
+        if ( ed.tip_colors ) S.tipColors = ed.tip_colors;
+        if ( ed.tip_sizes  ) S.tipSizes  = ed.tip_sizes;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // DOM shortcuts
-    // ─────────────────────────────────────────────────────────────────────────
-
+    // ── DOM ───────────────────────────────────────────────────────────────────
     var $body    = $( '#wizard-body' );
-    var $footer  = $( '#wizard-footer' );
     var $btnBack = $( '#wizard-btn-back' );
     var $btnNext = $( '#wizard-btn-next' );
     var $errMsg  = $( '#wizard-error-msg' );
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Navigation
-    // ─────────────────────────────────────────────────────────────────────────
+    // wp.media frames, keyed by side
+    var mediaFrames = {};
 
-    function goTo( step ) {
-        state.step = step;
-        updateStepIndicators();
-        renderStep( step );
-        updateNavButtons();
-        clearError();
-        $( '.wizard-body' ).scrollTop( 0 );
-        window.scrollTo( 0, 0 );
+    // ── Dynamic step definitions ──────────────────────────────────────────────
+
+    function buildDynamicSteps() {
+        var steps = [ { id: 'setup', type: 'setup', label: 'Setup', sublabel: '' } ];
+
+        S.tipSlugs.forEach( function ( t ) {
+            var tip = getTip( t );
+            steps.push( { id: 'colors-' + t, type: 'colors', tipSlug: t, tipName: tip.name, label: tip.name, sublabel: 'Colors' } );
+        } );
+
+        S.tipSlugs.forEach( function ( t ) {
+            var tip = getTip( t );
+            steps.push( { id: 'sizes-' + t, type: 'sizes', tipSlug: t, tipName: tip.name, label: tip.name, sublabel: 'Sizes' } );
+        } );
+
+        steps.push( { id: 'pricing',     type: 'pricing',     label: 'Pricing',  sublabel: '' } );
+        steps.push( { id: 'positioning', type: 'positioning', label: 'Design',   sublabel: 'Position' } );
+        steps.push( { id: 'review',      type: 'review',      label: 'Review',   sublabel: '' } );
+
+        S.dynamicSteps = steps;
     }
 
-    function updateNavButtons() {
-        var s = state.step;
-        $btnBack.toggle( s > 1 );
+    function rebuildStepIndicator() {
+        var $ol = $( '#wizard-steps' );
+        $ol.empty();
 
-        if ( s === 6 ) {
-            $btnNext.text( cfg.edit_data
-                ? i18n.update
-                : i18n.create
-            );
-        } else {
-            $btnNext.text( i18n.next || 'Next →' );
-        }
-    }
+        S.dynamicSteps.forEach( function ( step, i ) {
+            var $li = $( '<li class="wizard-step-indicator"></li>' )
+                .addClass( i === S.stepIndex ? 'active' : ( i < S.stepIndex ? 'done' : '' ) )
+                .attr( 'data-step-index', i );
 
-    function updateStepIndicators() {
-        $( '.wizard-step-indicator' ).each( function () {
-            var n = parseInt( $( this ).data( 'step' ), 10 );
-            $( this )
-                .toggleClass( 'active',    n === state.step )
-                .toggleClass( 'done',      n <  state.step );
+            $li.append( '<span class="step-num">' + ( i + 1 ) + '</span>' );
+            var labelHtml = '<span class="step-label">' + esc( step.label );
+            if ( step.sublabel ) labelHtml += '<br><small>' + esc( step.sublabel ) + '</small>';
+            labelHtml += '</span>';
+            $li.append( labelHtml );
+
+            $ol.append( $li );
         } );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Validation per step
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Navigation ────────────────────────────────────────────────────────────
+
+    function goTo( index ) {
+        if ( index < 0 || index >= S.dynamicSteps.length ) return;
+
+        S.stepIndex = index;
+        var step   = S.dynamicSteps[ index ];
+        var isLast = index === S.dynamicSteps.length - 1;
+
+        // Update step indicators
+        $( '.wizard-step-indicator' ).each( function () {
+            var i = parseInt( $( this ).data( 'step-index' ), 10 );
+            $( this )
+                .toggleClass( 'active', i === index )
+                .toggleClass( 'done',   i <  index  );
+        } );
+
+        // Clear body events before re-rendering to prevent accumulation
+        $body.off( '.wiz' );
+
+        // Render step content
+        switch ( step.type ) {
+            case 'setup':       renderSetup();                              break;
+            case 'colors':      renderColors( step.tipSlug, step.tipName ); break;
+            case 'sizes':       renderSizes(  step.tipSlug, step.tipName ); break;
+            case 'pricing':     renderPricing();                            break;
+            case 'positioning': renderPositioning();                        break;
+            case 'review':      renderReview();                             break;
+        }
+
+        $btnBack.toggle( index > 0 );
+        $btnNext.text( step.type === 'review'
+            ? ( d.edit_data ? 'Save Changes' : 'Create Product' )
+            : 'Next →'
+        ).prop( 'disabled', false );
+
+        $errMsg.text( '' );
+        window.scrollTo( 0, 0 );
+    }
+
+    // ── Proceed / validate ────────────────────────────────────────────────────
+
+    function proceed() {
+        var step = S.dynamicSteps[ S.stepIndex ];
+
+        // Only create when explicitly on the review step
+        if ( step.type === 'review' ) { createProduct(); return; }
+
+        var ok = validate( step );
+        if ( ok ) goTo( S.stepIndex + 1 );
+    }
 
     function validate( step ) {
-        clearError();
+        $errMsg.text( '' );
 
-        switch ( step ) {
+        switch ( step.type ) {
 
-            case 1:
-                collectStep1();
-                if ( ! state.designName ) { showError( i18n.err_no_name );  return false; }
-                if ( ! state.selectedTips.length ) { showError( i18n.err_no_tips ); return false; }
+            case 'setup':
+                S.name     = $( '#wiz-name' ).val().trim();
+                S.tipSlugs = [];
+                $( '.tip-cb:checked' ).each( function () { S.tipSlugs.push( $( this ).val() ); } );
+
+                if ( ! S.name )            return err( 'Enter a product name.' );
+                if ( ! S.tipSlugs.length )  return err( 'Select at least one product type.' );
+                if ( ! S.printFrontId )     return err( 'Upload or select a front print image.' );
+
+                // Init per-type state for any newly selected types
+                S.tipSlugs.forEach( function ( t ) {
+                    if ( ! S.tipColors[ t ] )    S.tipColors[ t ]    = {};
+                    if ( ! S.tipSizes[ t ] )      S.tipSizes[ t ]      = [];
+                    if ( ! S.tipPrices[ t ] )     S.tipPrices[ t ]     = { regular: '', sale: null };
+                    if ( ! S.tipPositions[ t ] )  S.tipPositions[ t ]  = { front: { x:50, y:25, width:50 }, back: null };
+                } );
+
+                buildDynamicSteps();
+                rebuildStepIndicator();
                 return true;
 
-            case 2:
-                collectStep2();
-                for ( var i = 0; i < state.selectedTips.length; i++ ) {
-                    var slug = state.selectedTips[ i ].slug;
-                    if ( ! state.tipConfigs[ slug ] || ! state.tipConfigs[ slug ].bojas.length ) {
-                        showError( i18n.err_no_colors );
-                        return false;
+            case 'colors': {
+                collectColors( step.tipSlug );
+                var sel = Object.keys( S.tipColors[ step.tipSlug ] || {} )
+                    .filter( function ( b ) { return S.tipColors[ step.tipSlug ][ b ].selected; } );
+                if ( ! sel.length ) return err( 'Select at least one color for ' + step.tipName + '.' );
+                return true;
+            }
+
+            case 'sizes':
+                collectSizes( step.tipSlug );
+                if ( ! S.tipSizes[ step.tipSlug ] || ! S.tipSizes[ step.tipSlug ].length ) {
+                    return err( 'Select at least one size for ' + step.tipName + '.' );
+                }
+                return true;
+
+            case 'pricing':
+                collectPricing();
+                for ( var i = 0; i < S.tipSlugs.length; i++ ) {
+                    var t = S.tipSlugs[ i ];
+                    if ( ! S.tipPrices[ t ] || ! S.tipPrices[ t ].regular || S.tipPrices[ t ].regular <= 0 ) {
+                        return err( 'Enter a regular price for each product type.' );
                     }
                 }
                 return true;
 
-            case 3:
-                collectStep3();
-                for ( var i = 0; i < state.selectedTips.length; i++ ) {
-                    var slug = state.selectedTips[ i ].slug;
-                    var cfg2 = state.tipConfigs[ slug ];
-                    if ( ! cfg2 || ! cfg2.regularPrice || cfg2.regularPrice <= 0 ) {
-                        showError( i18n.err_no_price );
-                        return false;
-                    }
-                }
-                return true;
-
-            case 4:
-                collectStep4();
-                for ( var i = 0; i < state.selectedTips.length; i++ ) {
-                    var slug = state.selectedTips[ i ].slug;
-                    if ( ! state.tipConfigs[ slug ] || ! state.tipConfigs[ slug ].velicinas.length ) {
-                        showError( i18n.err_no_sizes );
-                        return false;
-                    }
-                }
-                return true;
-
-            case 5:
-                collectStep5();
-                if ( ! state.printFrontId ) { showError( i18n.err_no_print ); return false; }
+            case 'positioning':
+                collectPositioning();
                 return true;
 
             default:
@@ -178,856 +210,693 @@
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Collect state from DOM (called before validation)
-    // ─────────────────────────────────────────────────────────────────────────
+    function err( msg ) { $errMsg.text( msg ); return false; }
 
-    function collectStep1() {
-        state.designName   = $( '#wizard-design-name' ).val().trim();
-        state.selectedTips = [];
+    // ── Collect helpers ───────────────────────────────────────────────────────
 
-        $( '.tip-checkbox:checked' ).each( function () {
-            var slug = $( this ).val();
-            var name = $( this ).data( 'name' );
-            state.selectedTips.push( { slug: slug, name: name } );
+    function collectColors( tipSlug ) {
+        if ( ! S.tipColors[ tipSlug ] ) S.tipColors[ tipSlug ] = {};
 
-            // Initialise tipConfig if missing
-            if ( ! state.tipConfigs[ slug ] ) {
-                state.tipConfigs[ slug ] = {
-                    bojas: [], velicinas: [],
-                    regularPrice: 0, salePrice: null,
-                    posFront: { x: 50, y: 25, width: 50 },
-                    posBack: null,
-                };
+        $body.find( '.boja-cb' ).each( function () {
+            var slug       = $( this ).val();
+            var selected   = this.checked;
+            var lightPrint = false;
+
+            if ( selected && S.printLightId ) {
+                lightPrint = $body.find( '#lp-' + tipSlug + '-' + slug ).is( ':checked' );
             }
-        } );
 
-        // Remove tipConfigs for deselected tips
-        Object.keys( state.tipConfigs ).forEach( function ( slug ) {
-            if ( ! state.selectedTips.find( function (t) { return t.slug === slug; } ) ) {
-                delete state.tipConfigs[ slug ];
-            }
+            S.tipColors[ tipSlug ][ slug ] = { selected: selected, lightPrint: lightPrint };
         } );
     }
 
-    function collectStep2() {
-        state.selectedTips.forEach( function ( tip ) {
-            var bojas = [];
-            $( '.boja-checkbox[data-tip="' + tip.slug + '"]:checked' ).each( function () {
-                bojas.push( $( this ).val() );
-            } );
-            state.tipConfigs[ tip.slug ].bojas = bojas;
+    function collectSizes( tipSlug ) {
+        S.tipSizes[ tipSlug ] = [];
+        $body.find( '.size-cb:checked' ).each( function () {
+            S.tipSizes[ tipSlug ].push( $( this ).val() );
         } );
     }
 
-    function collectStep3() {
-        state.selectedTips.forEach( function ( tip ) {
-            var reg  = parseFloat( $( '#price-regular-' + tip.slug ).val() ) || 0;
-            var sale = $( '#price-sale-' + tip.slug ).val().trim();
-            state.tipConfigs[ tip.slug ].regularPrice = reg;
-            state.tipConfigs[ tip.slug ].salePrice    = sale !== '' ? parseFloat( sale ) : null;
+    function collectPricing() {
+        S.tipSlugs.forEach( function ( t ) {
+            var reg  = parseFloat( $( '#reg-'  + t ).val() ) || 0;
+            var sale = $( '#sale-' + t ).val().trim();
+            S.tipPrices[ t ] = { regular: reg, sale: sale !== '' ? parseFloat( sale ) : null };
         } );
     }
 
-    function collectStep4() {
-        state.selectedTips.forEach( function ( tip ) {
-            var sizes = [];
-            $( '.size-checkbox[data-tip="' + tip.slug + '"]:checked' ).each( function () {
-                sizes.push( $( this ).val() );
-            } );
-            state.tipConfigs[ tip.slug ].velicinas = sizes;
-        } );
-    }
-
-    function collectStep5() {
-        // Print IDs are set directly on state via upload handlers
-        state.selectedTips.forEach( function ( tip ) {
-            state.tipConfigs[ tip.slug ].posFront = {
-                x    : parseInt( $( '#pos-front-x-'     + tip.slug ).val(), 10 ) || 50,
-                y    : parseInt( $( '#pos-front-y-'     + tip.slug ).val(), 10 ) || 25,
-                width: parseInt( $( '#pos-front-width-' + tip.slug ).val(), 10 ) || 50,
+    function collectPositioning() {
+        S.tipSlugs.forEach( function ( t ) {
+            S.tipPositions[ t ] = {
+                front: readPos( t, 'front' ),
+                back : S.printBackId ? readPos( t, 'back' ) : null,
             };
-
-            if ( state.printBackId ) {
-                state.tipConfigs[ tip.slug ].posBack = {
-                    x    : parseInt( $( '#pos-back-x-'     + tip.slug ).val(), 10 ) || 50,
-                    y    : parseInt( $( '#pos-back-y-'     + tip.slug ).val(), 10 ) || 25,
-                    width: parseInt( $( '#pos-back-width-' + tip.slug ).val(), 10 ) || 50,
-                };
-            } else {
-                state.tipConfigs[ tip.slug ].posBack = null;
-            }
         } );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Step renderers
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── SETUP (Step 1) ────────────────────────────────────────────────────────
 
-    function renderStep( step ) {
-        switch ( step ) {
-            case 1: renderStep1(); break;
-            case 2: renderStep2(); break;
-            case 3: renderStep3(); break;
-            case 4: renderStep4(); break;
-            case 5: renderStep5(); break;
-            case 6: renderStep6(); break;
-        }
-    }
+    function renderSetup() {
+        var h = '<div class="wizard-step">';
+        h += '<h2 class="step-title">Setup</h2>';
 
-    // ── Step 1 — Design name + product types ─────────────────────────────────
+        // Product name
+        h += '<div class="wiz-field">';
+        h += '<label class="wiz-label" for="wiz-name">Product Name <span class="req">*</span></label>';
+        h += '<input type="text" id="wiz-name" class="regular-text" value="' + esc( S.name ) + '" placeholder="e.g. Zmaj, Akira, Rose Pattern…">';
+        h += '</div>';
 
-    function renderStep1() {
-        var html = '<div class="wizard-step" data-step="1">';
-        html += '<h2 class="step-title">' + esc( i18n.step_labels[0] ) + '</h2>';
+        // Product types
+        h += '<div class="wiz-field">';
+        h += '<label class="wiz-label">Product Types <span class="req">*</span></label>';
+        h += '<p class="wiz-hint">Each type can have its own colors, sizes and price. Colors and sizes are configured per type in the next steps.</p>';
+        h += '<div class="wiz-checkbox-grid">';
+        ( d.tips || [] ).forEach( function ( t ) {
+            var chk = S.tipSlugs.indexOf( t.slug ) !== -1;
+            h += '<label class="wiz-check-card ' + ( chk ? 'is-checked' : '' ) + '">';
+            h += '<input type="checkbox" class="tip-cb" value="' + esc( t.slug ) + '" ' + ( chk ? 'checked' : '' ) + '>';
+            h += '<span class="check-card-name">' + esc( t.name ) + '</span>';
+            h += '</label>';
+        } );
+        h += '</div></div>';
 
-        // Design name
-        html += '<div class="wiz-field">';
-        html += '<label class="wiz-label" for="wizard-design-name">Design Name <span class="req">*</span></label>';
-        html += '<input type="text" id="wizard-design-name" class="regular-text" placeholder="e.g. Dragon, Rose Pattern…" value="' + esc( state.designName ) + '">';
-        html += '<p class="wiz-hint">Used as the product title prefix. Each product type becomes a separate WooCommerce product.</p>';
-        html += '</div>';
+        // Print images
+        h += '<div class="wiz-field">';
+        h += '<label class="wiz-label">Print Images</label>';
+        h += '<div class="wiz-print-uploads">';
+        h += buildPrintUploadRow( 'front', S.printFrontId, S.printFrontThumb,
+            'Print Design Image <span class="req">*</span>',
+            'Upload a transparent PNG of the print design.' );
+        h += buildPrintUploadRow( 'light', S.printLightId, S.printLightThumb,
+            'Light Print Design Image',
+            'Upload a transparent PNG of the light print design (optional). Used for light-coloured garments.' );
+        h += buildPrintUploadRow( 'back', S.printBackId, S.printBackThumb,
+            'Back Print Design Image',
+            'Upload a transparent PNG of the back print design (optional).' );
+        h += '</div></div>';
 
-        // Tip checkboxes
-        html += '<div class="wiz-field">';
-        html += '<label class="wiz-label">Product Types <span class="req">*</span></label>';
+        h += '</div>';
+        $body.html( h );
 
-        if ( ! cfg.tips || ! cfg.tips.length ) {
-            html += '<p class="wiz-warn">⚠ No product types (pa_tip) found. Add them in WooCommerce → Attributes.</p>';
-        } else {
-            html += '<div class="wiz-checkbox-grid">';
-            cfg.tips.forEach( function ( tip ) {
-                var checked = state.selectedTips.find( function (t) { return t.slug === tip.slug; } ) ? 'checked' : '';
-                html += '<label class="wiz-check-card ' + ( checked ? 'is-checked' : '' ) + '">';
-                html += '<input type="checkbox" class="tip-checkbox" value="' + esc( tip.slug ) + '" data-name="' + esc( tip.name ) + '" ' + checked + '>';
-                html += '<span class="check-card-name">' + esc( tip.name ) + '</span>';
-                html += '</label>';
-            } );
-            html += '</div>';
-        }
-        html += '</div>';
-        html += '</div>';
-
-        $body.html( html );
-
-        // Toggle card selected class
-        $body.on( 'change', '.tip-checkbox', function () {
+        // Bind events — using .wiz namespace so $body.off('.wiz') cleans them up
+        $body.on( 'change.wiz', '.tip-cb', function () {
             $( this ).closest( '.wiz-check-card' ).toggleClass( 'is-checked', this.checked );
+        } );
+
+        // File input trigger
+        $body.on( 'click.wiz', '.print-file-btn', function () {
+            $( '#file-' + $( this ).data( 'side' ) ).trigger( 'click' );
+        } );
+
+        // File chosen → upload via AJAX
+        $body.on( 'change.wiz', '.print-file-input', function () {
+            var side = $( this ).data( 'side' );
+            if ( this.files && this.files[0] ) uploadPrint( side, this.files[0] );
+        } );
+
+        // Media library picker
+        $body.on( 'click.wiz', '.print-library-btn', function () {
+            var side = $( this ).data( 'side' );
+            openMediaPicker( side );
+        } );
+
+        // Remove
+        $body.on( 'click.wiz', '.print-remove-btn', function () {
+            removePrint( $( this ).data( 'side' ) );
         } );
 
         // Focus name field
-        $( '#wizard-design-name' ).trigger( 'focus' );
+        setTimeout( function () { $( '#wiz-name' ).focus(); }, 50 );
     }
 
-    // ── Step 2 — Colors per tip ──────────────────────────────────────────────
+    function buildPrintUploadRow( side, imgId, thumbUrl, label, description ) {
+        var h = '<div class="wiz-print-upload-row">';
+        h += '<div class="wiz-print-upload-info">';
+        h += '<div class="wiz-print-upload-label">' + label + '</div>';
+        h += '<p class="wiz-hint">' + esc( description ) + '</p>';
+        h += '</div>';
+        h += '<div class="wiz-print-upload-controls">';
 
-    function renderStep2() {
-        var html = '<div class="wizard-step" data-step="2">';
-        html += '<h2 class="step-title">' + esc( i18n.step_labels[1] ) + '</h2>';
-
-        state.selectedTips.forEach( function ( tip ) {
-            var selectedBojas = state.tipConfigs[ tip.slug ].bojas;
-            html += '<div class="wiz-tip-section">';
-            html += '<h3 class="tip-section-title">' + esc( tip.name ) + '</h3>';
-            html += '<div class="wiz-quick-actions">';
-            html += '<button type="button" class="button button-small boja-select-all" data-tip="' + esc( tip.slug ) + '">' + esc( i18n.select_all ) + '</button>';
-            html += '<button type="button" class="button button-small boja-select-none" data-tip="' + esc( tip.slug ) + '">' + esc( i18n.select_none ) + '</button>';
-            html += '</div>';
-            html += '<div class="wiz-color-grid">';
-
-            if ( ! cfg.bojas || ! cfg.bojas.length ) {
-                html += '<p class="wiz-warn">No colors found in pa_boja.</p>';
-            } else {
-                cfg.bojas.forEach( function ( boja ) {
-                    var key        = tip.slug + '|' + boja.slug;
-                    var mockup     = ( cfg.mockup_map || {} )[ key ] || {};
-                    var hasFront   = mockup.has_front;
-                    var checked    = selectedBojas.indexOf( boja.slug ) !== -1;
-                    var missingCls = hasFront ? '' : 'no-mockup';
-
-                    html += '<label class="wiz-color-card ' + missingCls + ' ' + ( checked ? 'is-checked' : '' ) + '">';
-                    html += '<input type="checkbox" class="boja-checkbox" data-tip="' + esc( tip.slug ) + '" value="' + esc( boja.slug ) + '" ' + ( checked ? 'checked' : '' ) + '>';
-
-                    // Color swatch
-                    if ( boja.hex ) {
-                        html += '<span class="wiz-swatch" style="background:' + esc( boja.hex ) + ';"></span>';
-                    } else {
-                        html += '<span class="wiz-swatch swatch-empty"></span>';
-                    }
-
-                    // Mockup thumbnail
-                    if ( mockup.front_thumb ) {
-                        html += '<span class="wiz-mockup-thumb"><img src="' + esc( mockup.front_thumb ) + '" alt=""></span>';
-                    } else {
-                        html += '<span class="wiz-mockup-thumb wiz-mockup-missing">?</span>';
-                    }
-
-                    html += '<span class="wiz-color-name">' + esc( boja.name ) + '</span>';
-                    if ( ! hasFront ) {
-                        html += '<span class="wiz-no-mockup-badge" title="' + esc( i18n.no_mockup_warning ) + '">No mockup</span>';
-                    }
-                    html += '</label>';
-                } );
-            }
-
-            html += '</div>';// .wiz-color-grid
-
-            // Mockup library link if any missing
-            var missingCount = ( cfg.bojas || [] ).filter( function ( b ) {
-                return ! ( ( cfg.mockup_map || {} )[ tip.slug + '|' + b.slug ] || {} ).has_front;
-            } ).length;
-
-            if ( missingCount > 0 ) {
-                html += '<p class="wiz-warn-inline">⚠ ' + missingCount + ' color(s) have no base image. '
-                      + '<a href="' + esc( cfg.mockup_lib_url ) + '" target="_blank">' + esc( i18n.add_to_library ) + '</a></p>';
-            }
-
-            html += '</div>';// .wiz-tip-section
-        } );
-
-        html += '</div>';
-        $body.html( html );
-
-        // Toggle card class
-        $body.on( 'change', '.boja-checkbox', function () {
-            $( this ).closest( '.wiz-color-card' ).toggleClass( 'is-checked', this.checked );
-        } );
-
-        // Select all/none
-        $body.on( 'click', '.boja-select-all', function () {
-            var tipSlug = $( this ).data( 'tip' );
-            $( '.boja-checkbox[data-tip="' + tipSlug + '"]' ).prop( 'checked', true )
-                .closest( '.wiz-color-card' ).addClass( 'is-checked' );
-        } );
-        $body.on( 'click', '.boja-select-none', function () {
-            var tipSlug = $( this ).data( 'tip' );
-            $( '.boja-checkbox[data-tip="' + tipSlug + '"]' ).prop( 'checked', false )
-                .closest( '.wiz-color-card' ).removeClass( 'is-checked' );
-        } );
-    }
-
-    // ── Step 3 — Prices per tip ──────────────────────────────────────────────
-
-    function renderStep3() {
-        var html = '<div class="wizard-step" data-step="3">';
-        html += '<h2 class="step-title">' + esc( i18n.step_labels[2] ) + '</h2>';
-        html += '<p class="step-subtitle">Set prices for each product type. All colors and sizes within a type share the same price.</p>';
-
-        state.selectedTips.forEach( function ( tip ) {
-            var tipCfg = state.tipConfigs[ tip.slug ];
-
-            html += '<div class="wiz-tip-section wiz-price-section">';
-            html += '<h3 class="tip-section-title">' + esc( tip.name ) + '</h3>';
-            html += '<div class="wiz-price-row">';
-
-            html += '<div class="wiz-field wiz-field-inline">';
-            html += '<label class="wiz-label" for="price-regular-' + esc( tip.slug ) + '">' + esc( i18n.regular_price_label ) + ' <span class="req">*</span></label>';
-            html += '<div class="wiz-price-input">';
-            html += '<span class="wiz-currency">' + ( get_woocommerce_currency_symbol() ) + '</span>';
-            html += '<input type="number" id="price-regular-' + esc( tip.slug ) + '" class="price-regular" data-tip="' + esc( tip.slug ) + '" min="0" step="0.01" value="' + esc( tipCfg.regularPrice || '' ) + '">';
-            html += '</div></div>';
-
-            html += '<div class="wiz-field wiz-field-inline">';
-            html += '<label class="wiz-label" for="price-sale-' + esc( tip.slug ) + '">' + esc( i18n.sale_price_label ) + '</label>';
-            html += '<div class="wiz-price-input">';
-            html += '<span class="wiz-currency">' + ( get_woocommerce_currency_symbol() ) + '</span>';
-            html += '<input type="number" id="price-sale-' + esc( tip.slug ) + '" class="price-sale" data-tip="' + esc( tip.slug ) + '" min="0" step="0.01" value="' + esc( tipCfg.salePrice !== null ? tipCfg.salePrice : '' ) + '">';
-            html += '</div></div>';
-
-            html += '</div>';// .wiz-price-row
-            html += '</div>';
-        } );
-
-        html += '</div>';
-        $body.html( html );
-    }
-
-    // ── Step 4 — Sizes per tip ───────────────────────────────────────────────
-
-    function renderStep4() {
-        var html = '<div class="wizard-step" data-step="4">';
-        html += '<h2 class="step-title">' + esc( i18n.step_labels[3] ) + '</h2>';
-
-        state.selectedTips.forEach( function ( tip ) {
-            var selectedSizes = state.tipConfigs[ tip.slug ].velicinas;
-            html += '<div class="wiz-tip-section">';
-            html += '<h3 class="tip-section-title">' + esc( tip.name ) + '</h3>';
-            html += '<div class="wiz-quick-actions">';
-            html += '<button type="button" class="button button-small size-select-all" data-tip="' + esc( tip.slug ) + '">' + esc( i18n.select_all ) + '</button>';
-            html += '<button type="button" class="button button-small size-select-none" data-tip="' + esc( tip.slug ) + '">' + esc( i18n.select_none ) + '</button>';
-            html += '</div>';
-            html += '<div class="wiz-checkbox-grid wiz-size-grid">';
-
-            if ( ! cfg.velicinas || ! cfg.velicinas.length ) {
-                html += '<p class="wiz-warn">No sizes found in pa_velicina.</p>';
-            } else {
-                cfg.velicinas.forEach( function ( v ) {
-                    var checked = selectedSizes.indexOf( v.slug ) !== -1;
-                    html += '<label class="wiz-check-card wiz-size-card ' + ( checked ? 'is-checked' : '' ) + '">';
-                    html += '<input type="checkbox" class="size-checkbox" data-tip="' + esc( tip.slug ) + '" value="' + esc( v.slug ) + '" ' + ( checked ? 'checked' : '' ) + '>';
-                    html += '<span class="check-card-name">' + esc( v.name ) + '</span>';
-                    html += '</label>';
-                } );
-            }
-
-            html += '</div>';// .wiz-size-grid
-
-            // Show variation count preview
-            var colorCount = state.tipConfigs[ tip.slug ].bojas.length;
-            var sizeCount  = selectedSizes.length;
-            html += '<p class="wiz-variation-count" id="var-count-' + esc( tip.slug ) + '">'
-                  + colorCount + ' × ' + sizeCount + ' = <strong>' + ( colorCount * sizeCount ) + ' ' + esc( i18n.variations_count ) + '</strong></p>';
-
-            html += '</div>';
-        } );
-
-        html += '</div>';
-        $body.html( html );
-
-        // Update count on change
-        $body.on( 'change', '.size-checkbox', function () {
-            var tipSlug = $( this ).data( 'tip' );
-            $( this ).closest( '.wiz-check-card' ).toggleClass( 'is-checked', this.checked );
-            updateVariationCount( tipSlug );
-        } );
-
-        $body.on( 'click', '.size-select-all', function () {
-            var tipSlug = $( this ).data( 'tip' );
-            $( '.size-checkbox[data-tip="' + tipSlug + '"]' ).prop( 'checked', true )
-                .closest( '.wiz-check-card' ).addClass( 'is-checked' );
-            updateVariationCount( tipSlug );
-        } );
-        $body.on( 'click', '.size-select-none', function () {
-            var tipSlug = $( this ).data( 'tip' );
-            $( '.size-checkbox[data-tip="' + tipSlug + '"]' ).prop( 'checked', false )
-                .closest( '.wiz-check-card' ).removeClass( 'is-checked' );
-            updateVariationCount( tipSlug );
-        } );
-    }
-
-    function updateVariationCount( tipSlug ) {
-        var colorCount = state.tipConfigs[ tipSlug ] ? state.tipConfigs[ tipSlug ].bojas.length : 0;
-        var sizeCount  = $( '.size-checkbox[data-tip="' + tipSlug + '"]:checked' ).length;
-        $( '#var-count-' + tipSlug ).html(
-            colorCount + ' × ' + sizeCount + ' = <strong>' + ( colorCount * sizeCount ) + ' ' + esc( i18n.variations_count ) + '</strong>'
-        );
-    }
-
-    // ── Step 5 — Print design upload + positioning ───────────────────────────
-
-    function renderStep5() {
-        var html = '<div class="wizard-step" data-step="5">';
-        html += '<h2 class="step-title">' + esc( i18n.step_labels[4] ) + '</h2>';
-
-        // ── Upload section (shared) ──
-        html += '<div class="wiz-upload-section">';
-        html += '<div class="wiz-upload-pair">';
-
-        // Front print
-        html += '<div class="wiz-upload-slot" id="upload-slot-front">';
-        html += '<div class="wiz-upload-label">' + esc( i18n.upload_front ) + ' <span class="req">*</span></div>';
-        html += buildUploadSlotHTML( 'front', state.printFrontId, state.printFrontUrl );
-        html += '</div>';
-
-        // Back print
-        html += '<div class="wiz-upload-slot" id="upload-slot-back">';
-        html += '<div class="wiz-upload-label">' + esc( i18n.upload_back ) + '</div>';
-        html += buildUploadSlotHTML( 'back', state.printBackId, state.printBackUrl );
-        html += '</div>';
-
-        html += '</div>';// .wiz-upload-pair
-        html += '</div>';// .wiz-upload-section
-
-        // ── Positioning per tip ──
-        html += '<div class="wiz-position-section">';
-        html += '<h3 class="wiz-position-heading">Print Positioning</h3>';
-        html += '<p class="wiz-position-note">Set position for each product type. Preview updates in real time.</p>';
-
-        state.selectedTips.forEach( function ( tip ) {
-            var tipCfg = state.tipConfigs[ tip.slug ];
-            var pf     = tipCfg.posFront || { x: 50, y: 25, width: 50 };
-            var pb     = tipCfg.posBack  || { x: 50, y: 25, width: 50 };
-
-            // Find first available mockup image for preview
-            var previewFrontUrl = '';
-            var previewBackUrl  = '';
-            if ( tipCfg.bojas.length ) {
-                var firstBoja = tipCfg.bojas[0];
-                var mk = ( cfg.mockup_map || {} )[ tip.slug + '|' + firstBoja ] || {};
-                previewFrontUrl = mk.front_url || '';
-                previewBackUrl  = mk.back_url  || '';
-            }
-
-            html += '<div class="wiz-tip-position" data-tip="' + esc( tip.slug ) + '">';
-            html += '<h4 class="tip-pos-title">' + esc( tip.name ) + '</h4>';
-            html += '<p class="tip-pos-color-note">' + esc( i18n.preview_note ) + '</p>';
-
-            // Front position
-            html += '<div class="wiz-pos-panel" id="pos-panel-front-' + esc( tip.slug ) + '">';
-            html += '<div class="pos-panel-label">' + esc( i18n.front_label ) + '</div>';
-            html += '<div class="pos-panel-inner">';
-            html += buildCanvasHTML( tip.slug, 'front', pf );
-            html += buildPositionInputsHTML( tip.slug, 'front', pf );
-            html += '</div></div>';
-
-            // Back position (shown only if back print uploaded)
-            html += '<div class="wiz-pos-panel wiz-pos-back" id="pos-panel-back-' + esc( tip.slug ) + '" '
-                  + ( state.printBackId ? '' : 'style="display:none;"' ) + '>';
-            html += '<div class="pos-panel-label">' + esc( i18n.back_label ) + '</div>';
-            html += '<div class="pos-panel-inner">';
-            html += buildCanvasHTML( tip.slug, 'back', pb );
-            html += buildPositionInputsHTML( tip.slug, 'back', pb );
-            html += '</div></div>';
-
-            html += '</div>';// .wiz-tip-position
-        } );
-
-        html += '</div>';// .wiz-position-section
-        html += '</div>';
-
-        $body.html( html );
-
-        // Draw initial canvases
-        state.selectedTips.forEach( function ( tip ) {
-            var tipCfg = state.tipConfigs[ tip.slug ];
-            var firstBoja = tipCfg.bojas[0] || '';
-            var mk = ( cfg.mockup_map || {} )[ tip.slug + '|' + firstBoja ] || {};
-
-            drawCanvas( tip.slug, 'front', mk.front_url || '', state.printFrontUrl,
-                tipCfg.posFront || { x:50, y:25, width:50 } );
-
-            if ( state.printBackId ) {
-                drawCanvas( tip.slug, 'back', mk.back_url || '', state.printBackUrl,
-                    tipCfg.posBack || { x:50, y:25, width:50 } );
-            }
-        } );
-
-        bindStep5Events();
-    }
-
-    function buildUploadSlotHTML( side, imgId, imgUrl ) {
-        var html = '<div class="wiz-print-preview ' + ( imgId ? 'has-image' : '' ) + '" id="print-preview-' + side + '">';
-        if ( imgUrl ) {
-            html += '<img src="' + esc( imgUrl ) + '" alt="">';
-            html += '<button type="button" class="print-remove" data-side="' + side + '">✕</button>';
+        // Preview
+        h += '<div class="wiz-print-preview ' + ( imgId ? 'has-image' : '' ) + '" id="prev-' + side + '">';
+        if ( imgId && thumbUrl ) {
+            h += '<img src="' + esc( thumbUrl ) + '" alt="">';
+            h += '<button type="button" class="print-remove-btn" data-side="' + side + '" title="Remove">✕</button>';
         } else {
-            html += '<span class="dashicons dashicons-format-image"></span>';
+            h += '<span class="dashicons dashicons-format-image"></span>';
         }
-        html += '</div>';
-        html += '<input type="file" id="print-file-' + side + '" accept="image/png" style="display:none;">';
-        html += '<button type="button" class="button print-upload-btn" data-side="' + side + '">'
-              + ( imgId ? esc( i18n.change ) : esc( 'Upload PNG' ) ) + '</button>';
-        html += '<span class="print-upload-status" id="print-status-' + side + '"></span>';
-        return html;
+        h += '</div>';
+
+        // Buttons row
+        h += '<div class="wiz-print-btn-row">';
+        h += '<input type="file" class="print-file-input" id="file-' + side + '" data-side="' + side + '" accept="image/png" style="display:none">';
+        h += '<button type="button" class="button print-file-btn" data-side="' + side + '">📁 Upload PNG</button>';
+        h += '<button type="button" class="button print-library-btn" data-side="' + side + '">🖼 Media Library</button>';
+        h += '</div>';
+
+        h += '<span class="print-upload-status" id="sts-' + side + '"></span>';
+        h += '</div></div>';
+        return h;
     }
 
-    function buildCanvasHTML( tipSlug, side, pos ) {
-        return '<div class="wiz-canvas-wrap">'
-             + '<canvas id="canvas-' + side + '-' + esc( tipSlug ) + '" class="wiz-canvas"></canvas>'
-             + '<div class="canvas-no-base" id="no-base-' + side + '-' + esc( tipSlug ) + '" style="display:none;">'
-             + esc( i18n.no_preview ) + '</div>'
-             + '</div>';
+    // ── WP Media picker for print images ──────────────────────────────────────
+
+    function openMediaPicker( side ) {
+        if ( ! mediaFrames[ side ] ) {
+            mediaFrames[ side ] = wp.media( {
+                title    : 'Select ' + side.charAt(0).toUpperCase() + side.slice(1) + ' Print Image',
+                button   : { text: 'Use this image' },
+                multiple : false,
+                library  : { type: 'image' },
+            } );
+        }
+
+        var frame = mediaFrames[ side ];
+
+        frame.off( 'select' );
+        frame.on( 'select', function () {
+            var attachment = frame.state().get( 'selection' ).first().toJSON();
+            var thumbUrl   = attachment.sizes && attachment.sizes.thumbnail
+                             ? attachment.sizes.thumbnail.url
+                             : attachment.url;
+            setPrintImage( side, attachment.id, attachment.url, thumbUrl );
+        } );
+
+        frame.open();
     }
 
-    function buildPositionInputsHTML( tipSlug, side, pos ) {
-        var html = '<div class="wiz-pos-inputs">';
-        [ ['x','X (%)', -100, 100], ['y','Y (%)', -100, 100], ['width','Width (%)', 1, 100] ].forEach( function ( f ) {
-            html += '<div class="wiz-pos-field">';
-            html += '<label>' + f[1] + '</label>';
-            html += '<input type="number" id="pos-' + side + '-' + f[0] + '-' + esc( tipSlug ) + '" '
-                  + 'class="pos-input" data-tip="' + esc( tipSlug ) + '" data-side="' + side + '" data-axis="' + f[0] + '" '
-                  + 'value="' + esc( pos[ f[0] ] ) + '" min="' + f[2] + '" max="' + f[3] + '" step="1">';
-            html += '</div>';
-        } );
-        html += '</div>';
-        return html;
-    }
+    function uploadPrint( side, file ) {
+        var $sts = $( '#sts-' + side );
+        $sts.text( 'Uploading…' );
 
-    function bindStep5Events() {
-        // File input trigger
-        $body.on( 'click', '.print-upload-btn', function () {
-            var side = $( this ).data( 'side' );
-            $( '#print-file-' + side ).trigger( 'click' );
-        } );
+        var fd = new FormData();
+        fd.append( 'action',      'thready_wizard_upload_print' );
+        fd.append( '_ajax_nonce', d.nonce );
+        fd.append( 'file',        file );
 
-        // File chosen — upload via AJAX
-        $body.on( 'change', '#print-file-front, #print-file-back', function () {
-            var side = this.id === 'print-file-front' ? 'front' : 'back';
-            if ( this.files && this.files[0] ) {
-                uploadPrintFile( side, this.files[0] );
-            }
-        } );
-
-        // Remove print
-        $body.on( 'click', '.print-remove', function () {
-            var side = $( this ).data( 'side' );
-            removePrint( side );
-        } );
-
-        // Position input → redraw canvas
-        $body.on( 'input change', '.pos-input', function () {
-            var tipSlug = $( this ).data( 'tip' );
-            var side    = $( this ).data( 'side' );
-            var pos     = readPosInputs( tipSlug, side );
-            var firstBoja = state.tipConfigs[ tipSlug ].bojas[0] || '';
-            var mk      = ( cfg.mockup_map || {} )[ tipSlug + '|' + firstBoja ] || {};
-            var baseUrl = side === 'front' ? mk.front_url || '' : mk.back_url || '';
-            var printUrl = side === 'front' ? state.printFrontUrl : state.printBackUrl;
-            drawCanvas( tipSlug, side, baseUrl, printUrl, pos );
-        } );
-    }
-
-    function readPosInputs( tipSlug, side ) {
-        return {
-            x    : parseInt( $( '#pos-' + side + '-x-'     + tipSlug ).val(), 10 ) || 50,
-            y    : parseInt( $( '#pos-' + side + '-y-'     + tipSlug ).val(), 10 ) || 25,
-            width: parseInt( $( '#pos-' + side + '-width-' + tipSlug ).val(), 10 ) || 50,
-        };
-    }
-
-    function uploadPrintFile( side, file ) {
-        var $status = $( '#print-status-' + side );
-        $status.text( i18n.uploading );
-
-        var formData = new FormData();
-        formData.append( 'action',      'thready_wizard_upload_print' );
-        formData.append( '_ajax_nonce', cfg.nonce );
-        formData.append( 'file',        file );
-
-        $.ajax( {
-            url        : cfg.ajax_url,
-            type       : 'POST',
-            data       : formData,
-            processData: false,
-            contentType: false,
-        } )
+        $.ajax( { url: d.ajax_url, type: 'POST', data: fd, processData: false, contentType: false } )
         .done( function ( res ) {
-            if ( res.success ) {
-                if ( side === 'front' ) {
-                    state.printFrontId  = res.data.attachment_id;
-                    state.printFrontUrl = res.data.url;
-                } else {
-                    state.printBackId  = res.data.attachment_id;
-                    state.printBackUrl = res.data.url;
-                }
-
-                updatePrintPreview( side, res.data.thumb_url, res.data.url );
-                $status.text( '' );
-
-                // Redraw all canvases for this side
-                state.selectedTips.forEach( function ( tip ) {
-                    var firstBoja = state.tipConfigs[ tip.slug ].bojas[0] || '';
-                    var mk = ( cfg.mockup_map || {} )[ tip.slug + '|' + firstBoja ] || {};
-                    var baseUrl = side === 'front' ? mk.front_url || '' : mk.back_url || '';
-                    var pos = readPosInputs( tip.slug, side );
-                    drawCanvas( tip.slug, side, baseUrl, res.data.url, pos );
-                } );
-
-                // Show/hide back positioning panels
-                if ( side === 'back' ) {
-                    $( '.wiz-pos-back' ).show();
-                }
-            } else {
-                $status.text( res.data && res.data.message ? res.data.message : 'Upload failed' );
-            }
+            if ( ! res.success ) { $sts.text( ( res.data && res.data.message ) || 'Upload failed' ); return; }
+            setPrintImage( side, res.data.attachment_id, res.data.url, res.data.thumb_url );
+            $sts.text( '' );
         } )
-        .fail( function () { $status.text( 'Upload failed' ); } );
+        .fail( function () { $sts.text( 'Upload failed.' ); } );
     }
 
-    function updatePrintPreview( side, thumbUrl, fullUrl ) {
-        var $preview = $( '#print-preview-' + side );
-        $preview.addClass( 'has-image' ).html(
-            '<img src="' + esc( thumbUrl ) + '" alt="">'
-            + '<button type="button" class="print-remove" data-side="' + side + '">✕</button>'
-        );
-        $( '.print-upload-btn[data-side="' + side + '"]' ).text( i18n.change );
+    function setPrintImage( side, id, url, thumbUrl ) {
+        if ( side === 'front' ) { S.printFrontId = id; S.printFrontUrl = url; S.printFrontThumb = thumbUrl; }
+        if ( side === 'light' ) { S.printLightId = id; S.printLightUrl = url; S.printLightThumb = thumbUrl; }
+        if ( side === 'back'  ) { S.printBackId  = id; S.printBackUrl  = url; S.printBackThumb  = thumbUrl; }
+
+        $( '#prev-' + side )
+            .addClass( 'has-image' )
+            .html( '<img src="' + esc( thumbUrl ) + '" alt="">'
+                 + '<button type="button" class="print-remove-btn" data-side="' + side + '" title="Remove">✕</button>' );
     }
 
     function removePrint( side ) {
-        if ( side === 'front' ) {
-            state.printFrontId  = 0;
-            state.printFrontUrl = '';
-        } else {
-            state.printBackId  = 0;
-            state.printBackUrl = '';
-        }
-        var $preview = $( '#print-preview-' + side );
-        $preview.removeClass( 'has-image' ).html( '<span class="dashicons dashicons-format-image"></span>' );
-        $( '.print-upload-btn[data-side="' + side + '"]' ).text( 'Upload PNG' );
+        if ( side === 'front' ) { S.printFrontId = 0; S.printFrontUrl = ''; S.printFrontThumb = ''; }
+        if ( side === 'light' ) { S.printLightId = 0; S.printLightUrl = ''; S.printLightThumb = ''; }
+        if ( side === 'back'  ) { S.printBackId  = 0; S.printBackUrl  = ''; S.printBackThumb  = ''; }
 
-        // Re-draw canvases without print
-        if ( side === 'front' || side === 'back' ) {
-            state.selectedTips.forEach( function ( tip ) {
-                var firstBoja = state.tipConfigs[ tip.slug ].bojas[0] || '';
-                var mk = ( cfg.mockup_map || {} )[ tip.slug + '|' + firstBoja ] || {};
-                var baseUrl = side === 'front' ? mk.front_url || '' : mk.back_url || '';
-                var pos = readPosInputs( tip.slug, side );
-                drawCanvas( tip.slug, side, baseUrl, '', pos );
-            } );
-
-            if ( side === 'back' ) {
-                $( '.wiz-pos-back' ).hide();
-            }
-        }
+        $( '#prev-' + side )
+            .removeClass( 'has-image' )
+            .html( '<span class="dashicons dashicons-format-image"></span>' );
     }
 
-    // ── Canvas drawing ───────────────────────────────────────────────────────
+    // ── COLORS (one step per type) ────────────────────────────────────────────
 
-    function drawCanvas( tipSlug, side, baseUrl, printUrl, pos ) {
-        var canvasId = 'canvas-' + side + '-' + tipSlug;
-        var canvas   = document.getElementById( canvasId );
-        if ( ! canvas ) return;
+    function renderColors( tipSlug, tipName ) {
+        var tipColorState = S.tipColors[ tipSlug ] || {};
+        var hasLight      = S.printLightId > 0;
+        var hasBack       = S.printBackId  > 0;
 
-        var ctx      = canvas.getContext( '2d' );
-        var $noBase  = $( '#no-base-' + side + '-' + tipSlug );
+        var h = '<div class="wizard-step">';
+        h += '<h2 class="step-title">' + esc( tipName ) + ' — Colors</h2>';
+        h += '<p class="step-subtitle">Select which colors are available for ' + esc( tipName ) + '.</p>';
 
-        if ( ! baseUrl ) {
-            $( canvas ).hide();
-            $noBase.show();
-            return;
+        if ( hasLight ) {
+            h += '<p class="wiz-info-note">💡 Light print uploaded — check <strong>Light print</strong> on colors where the lighter design should be used.</p>';
         }
 
-        $( canvas ).show();
-        $noBase.hide();
+        h += '<div class="wiz-quick-actions">';
+        h += '<button type="button" class="button button-small boja-all-btn">All</button>';
+        h += '<button type="button" class="button button-small boja-none-btn">None</button>';
+        h += '</div>';
 
-        var baseImg = new Image();
-        baseImg.crossOrigin = 'anonymous';
+        h += '<div class="wiz-color-grid-full">';
 
-        baseImg.onload = function () {
-            // Scale canvas to fit container (max 300px wide)
-            var maxW   = Math.min( 300, baseImg.width );
-            var scale  = maxW / baseImg.width;
-            canvas.width  = Math.round( baseImg.width  * scale );
-            canvas.height = Math.round( baseImg.height * scale );
+        ( d.bojas || [] ).forEach( function ( b ) {
+            var colorState = tipColorState[ b.slug ] || { selected: false, lightPrint: false };
+            var chk        = colorState.selected;
+            var lp         = colorState.lightPrint;
+            var mk         = ( d.mockup_map || {} )[ tipSlug + '|' + b.slug ] || {};
 
-            ctx.clearRect( 0, 0, canvas.width, canvas.height );
-            ctx.drawImage( baseImg, 0, 0, canvas.width, canvas.height );
+            h += '<div class="wiz-color-card-wrap ' + ( chk ? 'is-selected' : '' ) + '">';
+
+            h += '<label class="wiz-color-card ' + ( chk ? 'is-checked' : '' ) + ( ! mk.has_front ? ' no-mockup' : '' ) + '">';
+            h += '<input type="checkbox" class="boja-cb" data-tip="' + esc( tipSlug ) + '" value="' + esc( b.slug ) + '" ' + ( chk ? 'checked' : '' ) + '>';
+
+            if ( b.hex ) h += '<span class="wiz-swatch" style="background:' + esc( b.hex ) + ';"></span>';
+            else         h += '<span class="wiz-swatch swatch-empty"></span>';
+
+            if ( mk.front_thumb ) {
+                h += '<span class="wiz-mockup-thumb"><img src="' + esc( mk.front_thumb ) + '" alt="" title="Front base image"></span>';
+            } else {
+                h += '<span class="wiz-mockup-thumb wiz-mockup-missing" title="No front base image">?</span>';
+            }
+
+            if ( hasBack ) {
+                if ( mk.has_back ) {
+                    h += '<span class="wiz-mockup-thumb wiz-mockup-back-thumb" title="Back base image available">✓B</span>';
+                } else {
+                    h += '<span class="wiz-mockup-thumb wiz-mockup-missing" title="No back base image">?B</span>';
+                }
+            }
+
+            h += '<span class="wiz-color-name">' + esc( b.name ) + '</span>';
+            if ( ! mk.has_front ) h += '<span class="wiz-no-mockup-badge">!</span>';
+            h += '</label>';
+
+            if ( hasLight ) {
+                h += '<label class="wiz-light-print-label" id="lp-wrap-' + esc( tipSlug ) + '-' + esc( b.slug ) + '" '
+                   + 'style="' + ( chk ? '' : 'display:none;' ) + '">';
+                h += '<input type="checkbox" id="lp-' + esc( tipSlug ) + '-' + esc( b.slug ) + '" ' + ( lp ? 'checked' : '' ) + '>';
+                h += ' Light print';
+                h += '</label>';
+            }
+
+            h += '</div>'; // .wiz-color-card-wrap
+        } );
+
+        h += '</div>'; // .wiz-color-grid-full
+
+        var missingCount = ( d.bojas || [] ).filter( function ( b ) {
+            return ! ( ( d.mockup_map || {} )[ tipSlug + '|' + b.slug ] || {} ).has_front;
+        } ).length;
+
+        if ( missingCount ) {
+            h += '<p class="wiz-warn-inline" style="margin-top:12px;">⚠ ' + missingCount
+               + ' color(s) have no base image. <a href="' + esc( d.mockup_lib_url ) + '" target="_blank">Add in Mockup Library →</a></p>';
+        }
+
+        h += '</div>';
+        $body.html( h );
+
+        $body.on( 'change.wiz', '.boja-cb', function () {
+            var slug    = $( this ).val();
+            var checked = this.checked;
+            $( this ).closest( '.wiz-color-card' ).toggleClass( 'is-checked', checked );
+            $( this ).closest( '.wiz-color-card-wrap' ).toggleClass( 'is-selected', checked );
+            if ( hasLight ) {
+                $( '#lp-wrap-' + tipSlug + '-' + slug ).toggle( checked );
+            }
+        } );
+
+        $body.on( 'click.wiz', '.boja-all-btn', function () {
+            $body.find( '.boja-cb' ).prop( 'checked', true )
+                .closest( '.wiz-color-card' ).addClass( 'is-checked' );
+            $body.find( '.wiz-color-card-wrap' ).addClass( 'is-selected' );
+            if ( hasLight ) $body.find( '[id^="lp-wrap-"]' ).show();
+        } );
+
+        $body.on( 'click.wiz', '.boja-none-btn', function () {
+            $body.find( '.boja-cb' ).prop( 'checked', false )
+                .closest( '.wiz-color-card' ).removeClass( 'is-checked' );
+            $body.find( '.wiz-color-card-wrap' ).removeClass( 'is-selected' );
+            if ( hasLight ) $body.find( '[id^="lp-wrap-"]' ).hide();
+        } );
+    }
+
+    // ── SIZES (one step per type) ─────────────────────────────────────────────
+
+    function renderSizes( tipSlug, tipName ) {
+        var selected   = S.tipSizes[ tipSlug ] || [];
+        var colorCount = Object.keys( S.tipColors[ tipSlug ] || {} )
+            .filter( function ( b ) { return ( S.tipColors[ tipSlug ] || {} )[ b ].selected; } ).length;
+
+        var h = '<div class="wizard-step">';
+        h += '<h2 class="step-title">' + esc( tipName ) + ' — Sizes</h2>';
+        h += '<p class="step-subtitle">Select available sizes for ' + esc( tipName )
+           + '. Sizes are stored as options on each variation, not as separate variations.</p>';
+
+        h += '<div class="wiz-quick-actions">';
+        h += '<button type="button" class="button button-small size-all-btn">All</button>';
+        h += '<button type="button" class="button button-small size-none-btn">None</button>';
+        h += '</div>';
+
+        h += '<div class="wiz-checkbox-grid wiz-size-grid">';
+        ( d.velicinas || [] ).forEach( function ( v ) {
+            var chk = selected.indexOf( v.slug ) !== -1;
+            h += '<label class="wiz-check-card wiz-size-card ' + ( chk ? 'is-checked' : '' ) + '">';
+            h += '<input type="checkbox" class="size-cb" value="' + esc( v.slug ) + '" ' + ( chk ? 'checked' : '' ) + '>';
+            h += '<span class="check-card-name">' + esc( v.name ) + '</span>';
+            h += '</label>';
+        } );
+        h += '</div>';
+
+        h += '<p class="wiz-variation-count" id="var-count">';
+        h += varCountText( colorCount, selected.length, tipName );
+        h += '</p>';
+
+        h += '</div>';
+        $body.html( h );
+
+        $body.on( 'change.wiz', '.size-cb', function () {
+            $( this ).closest( '.wiz-check-card' ).toggleClass( 'is-checked', this.checked );
+            $( '#var-count' ).html( varCountText( colorCount, $body.find( '.size-cb:checked' ).length, tipName ) );
+        } );
+
+        $body.on( 'click.wiz', '.size-all-btn', function () {
+            $body.find( '.size-cb' ).prop( 'checked', true ).closest( '.wiz-check-card' ).addClass( 'is-checked' );
+            $( '#var-count' ).html( varCountText( colorCount, $body.find( '.size-cb' ).length, tipName ) );
+        } );
+
+        $body.on( 'click.wiz', '.size-none-btn', function () {
+            $body.find( '.size-cb' ).prop( 'checked', false ).closest( '.wiz-check-card' ).removeClass( 'is-checked' );
+            $( '#var-count' ).html( varCountText( colorCount, 0, tipName ) );
+        } );
+    }
+
+    function varCountText( colorCount, sizeCount, tipName ) {
+        return '<strong>' + colorCount + '</strong> ' + esc( tipName )
+             + ' variations × <strong>' + sizeCount + '</strong> available sizes each';
+    }
+
+    // ── PRICING ───────────────────────────────────────────────────────────────
+
+    function renderPricing() {
+        var sym = $( '#thready-wizard' ).data( 'currency' ) || '';
+        var h = '<div class="wizard-step">';
+        h += '<h2 class="step-title">Pricing</h2>';
+        h += '<p class="step-subtitle">Set the price for each product type. All colors within a type share the same price.</p>';
+
+        S.tipSlugs.forEach( function ( t ) {
+            var tip = getTip( t );
+            var p   = S.tipPrices[ t ] || { regular: '', sale: null };
+
+            h += '<div class="wiz-tip-section wiz-price-section">';
+            h += '<h3 class="tip-section-title">' + esc( tip.name ) + '</h3>';
+            h += '<div class="wiz-price-row">';
+
+            h += '<div class="wiz-field wiz-field-inline">';
+            h += '<label class="wiz-label">Regular Price <span class="req">*</span></label>';
+            h += '<div class="wiz-price-input"><span class="wiz-currency">' + esc( sym ) + '</span>';
+            h += '<input type="number" id="reg-' + esc( t ) + '" min="0" step="0.01" value="' + esc( p.regular || '' ) + '"></div></div>';
+
+            h += '<div class="wiz-field wiz-field-inline">';
+            h += '<label class="wiz-label">Sale Price <span style="font-weight:400;color:#646970">(optional)</span></label>';
+            h += '<div class="wiz-price-input"><span class="wiz-currency">' + esc( sym ) + '</span>';
+            h += '<input type="number" id="sale-' + esc( t ) + '" min="0" step="0.01" value="' + esc( p.sale !== null ? p.sale : '' ) + '"></div></div>';
+
+            h += '</div></div>';
+        } );
+
+        h += '</div>';
+        $body.html( h );
+    }
+
+    // ── POSITIONING ───────────────────────────────────────────────────────────
+
+    function renderPositioning() {
+        var h = '<div class="wizard-step">';
+        h += '<h2 class="step-title">Print Positioning</h2>';
+        h += '<p class="step-subtitle">Set print position and size per product type. Preview shows the first selected color.</p>';
+
+        S.tipSlugs.forEach( function ( t ) {
+            var tip  = getTip( t );
+            var pos  = S.tipPositions[ t ] || { front: { x:50, y:25, width:50 }, back: null };
+            var pf   = pos.front || { x:50, y:25, width:50 };
+            var pb   = pos.back  || { x:50, y:25, width:50 };
+
+            var firstBoja = getFirstSelectedBoja( t );
+            var mk = ( d.mockup_map || {} )[ t + '|' + firstBoja ] || {};
+
+            h += '<div class="wiz-tip-position" data-tip="' + esc( t ) + '">';
+            h += '<h4 class="tip-pos-title">' + esc( tip.name ) + '</h4>';
+            if ( firstBoja ) {
+                h += '<p class="tip-pos-color-note">Preview: ' + esc( getBoja( firstBoja ).name ) + '</p>';
+            }
+
+            // Front panel
+            h += '<div class="wiz-pos-panel">';
+            h += '<div class="pos-panel-label">Front Print</div>';
+            h += '<div class="pos-panel-inner">';
+            h += '<div class="wiz-canvas-wrap">';
+            h += '<canvas id="cv-front-' + esc( t ) + '" class="wiz-canvas"></canvas>';
+            h += '<div class="canvas-no-base" id="nb-front-' + esc( t ) + '" style="display:none;">No base image — add in Mockup Library</div>';
+            h += '</div>';
+            h += buildPosInputs( t, 'front', pf );
+            h += '</div></div>';
+
+            // Back panel
+            if ( S.printBackId ) {
+                h += '<div class="wiz-pos-panel" id="pp-back-' + esc( t ) + '">';
+                h += '<div class="pos-panel-label">Back Print</div>';
+                h += '<div class="pos-panel-inner">';
+                h += '<div class="wiz-canvas-wrap">';
+                h += '<canvas id="cv-back-' + esc( t ) + '" class="wiz-canvas"></canvas>';
+                h += '<div class="canvas-no-base" id="nb-back-' + esc( t ) + '" style="display:none;">No back base image</div>';
+                h += '</div>';
+                h += buildPosInputs( t, 'back', pb );
+                h += '</div></div>';
+            }
+
+            h += '</div>'; // .wiz-tip-position
+        } );
+
+        h += '</div>';
+        $body.html( h );
+
+        // Draw canvases
+        S.tipSlugs.forEach( function ( t ) {
+            var firstBoja = getFirstSelectedBoja( t );
+            var mk   = ( d.mockup_map || {} )[ t + '|' + firstBoja ] || {};
+            var pos  = S.tipPositions[ t ] || { front: { x:50, y:25, width:50 }, back: null };
+            drawCanvas( t, 'front', mk.front_url || '', S.printFrontUrl, pos.front || { x:50, y:25, width:50 } );
+            if ( S.printBackId ) {
+                drawCanvas( t, 'back', mk.back_url || '', S.printBackUrl, pos.back || { x:50, y:25, width:50 } );
+            }
+        } );
+
+        $body.on( 'input.wiz change.wiz', '.pos-input', function () {
+            var t    = $( this ).data( 'tip' );
+            var side = $( this ).data( 'side' );
+            var pos  = readPos( t, side );
+            var firstBoja = getFirstSelectedBoja( t );
+            var mk   = ( d.mockup_map || {} )[ t + '|' + firstBoja ] || {};
+            var base  = side === 'front' ? ( mk.front_url || '' ) : ( mk.back_url || '' );
+            var print = side === 'front' ? S.printFrontUrl : S.printBackUrl;
+            drawCanvas( t, side, base, print, pos );
+        } );
+    }
+
+    function buildPosInputs( tip, side, pos ) {
+        var h = '<div class="wiz-pos-inputs">';
+        [ [ 'x','X (%)',-100,100 ], [ 'y','Y (%)',-100,100 ], [ 'width','Width (%)',1,100 ] ]
+        .forEach( function ( f ) {
+            h += '<div class="wiz-pos-field"><label>' + f[1] + '</label>';
+            h += '<input type="number"'
+               + ' id="pos-' + side + '-' + f[0] + '-' + esc( tip ) + '"'
+               + ' class="pos-input" data-tip="' + esc( tip ) + '" data-side="' + side + '" data-axis="' + f[0] + '"'
+               + ' value="' + esc( pos[ f[0] ] ) + '" min="' + f[2] + '" max="' + f[3] + '" step="1">';
+            h += '</div>';
+        } );
+        return h + '</div>';
+    }
+
+    function readPos( tip, side ) {
+        return {
+            x    : parseInt( $( '#pos-' + side + '-x-'     + tip ).val(), 10 ) || 50,
+            y    : parseInt( $( '#pos-' + side + '-y-'     + tip ).val(), 10 ) || 25,
+            width: parseInt( $( '#pos-' + side + '-width-' + tip ).val(), 10 ) || 50,
+        };
+    }
+
+    // ── REVIEW ────────────────────────────────────────────────────────────────
+
+    function renderReview() {
+        var totalVars = S.tipSlugs.reduce( function ( sum, t ) {
+            return sum + Object.keys( S.tipColors[ t ] || {} )
+                .filter( function ( b ) { return ( S.tipColors[ t ] || {} )[ b ].selected; } ).length;
+        }, 0 );
+
+        var sym = $( '#thready-wizard' ).data( 'currency' ) || '';
+        var h = '<div class="wizard-step">';
+        h += '<h2 class="step-title">Review</h2>';
+        h += '<p class="step-subtitle">Check your configuration, then create the product.</p>';
+
+        h += '<div class="wiz-review-card">';
+        h += rRow( 'Product Name',   S.name );
+        h += rRow( 'Types',          S.tipSlugs.map( function(t){ return getTip(t).name; } ).join( ', ' ) );
+        h += rRow( 'Total Variations', '<strong>' + totalVars + '</strong>' );
+        h += rRow( 'Front Print',    S.printFrontId ? '✓ set' : '<span class="wiz-missing">⚠ missing</span>' );
+        h += rRow( 'Light Print',    S.printLightId ? '✓ set' : 'none' );
+        h += rRow( 'Back Print',     S.printBackId  ? '✓ set' : 'none' );
+        h += '</div>';
+
+        S.tipSlugs.forEach( function ( t ) {
+            var tip     = getTip( t );
+            var colors  = Object.keys( S.tipColors[ t ] || {} )
+                .filter( function ( b ) { return ( S.tipColors[ t ] || {} )[ b ].selected; } );
+            var lpCount = colors.filter( function ( b ) { return ( S.tipColors[ t ] || {} )[ b ].lightPrint; } ).length;
+            var sizes   = S.tipSizes[ t ] || [];
+            var price   = S.tipPrices[ t ] || {};
+            var pos     = S.tipPositions[ t ] || {};
+
+            h += '<div class="wiz-review-tip">';
+            h += '<div class="review-tip-header">' + esc( tip.name ) + '</div>';
+            h += '<div class="review-tip-body">';
+            h += rRow( 'Colors',    colors.length + ' selected' + ( lpCount ? ' (' + lpCount + ' light print)' : '' ) );
+            h += rRow( 'Sizes',     sizes.length + ' available sizes' );
+            h += rRow( 'Regular Price', price.regular ? sym + price.regular : '—' );
+            if ( price.sale ) h += rRow( 'Sale Price', sym + price.sale );
+            if ( pos.front ) h += rRow( 'Front Pos', 'X:' + pos.front.x + '% Y:' + pos.front.y + '% W:' + pos.front.width + '%' );
+            if ( pos.back  ) h += rRow( 'Back Pos',  'X:' + pos.back.x  + '% Y:' + pos.back.y  + '% W:' + pos.back.width  + '%' );
+            h += '</div></div>';
+        } );
+
+        h += '<div id="wiz-result" style="display:none;margin-top:20px;"></div>';
+        h += '</div>';
+        $body.html( h );
+    }
+
+    function rRow( label, val ) {
+        return '<div class="review-row"><span class="review-label">' + esc( label ) + '</span>'
+             + '<span class="review-val">' + val + '</span></div>';
+    }
+
+    // ── Canvas ────────────────────────────────────────────────────────────────
+
+    function drawCanvas( tip, side, baseUrl, printUrl, pos ) {
+        var cv     = document.getElementById( 'cv-' + side + '-' + tip );
+        var noBase = document.getElementById( 'nb-' + side + '-' + tip );
+        if ( ! cv ) return;
+
+        if ( ! baseUrl ) { $( cv ).hide(); if ( noBase ) $( noBase ).show(); return; }
+        $( cv ).show(); if ( noBase ) $( noBase ).hide();
+
+        var base = new Image();
+        base.crossOrigin = 'anonymous';
+        base.onload = function () {
+            var maxW  = Math.min( 280, base.naturalWidth );
+            var scale = maxW / base.naturalWidth;
+            cv.width  = Math.round( base.naturalWidth  * scale );
+            cv.height = Math.round( base.naturalHeight * scale );
+            var ctx   = cv.getContext( '2d' );
+            ctx.clearRect( 0, 0, cv.width, cv.height );
+            ctx.drawImage( base, 0, 0, cv.width, cv.height );
 
             if ( ! printUrl ) return;
-
-            var printImg = new Image();
-            printImg.crossOrigin = 'anonymous';
-
-            printImg.onload = function () {
-                // Mirror the PHP GD positioning logic exactly
-                var targetW = Math.round( ( pos.width / 100 ) * canvas.width );
-                var targetH = Math.round( ( targetW * printImg.height ) / printImg.width );
-
-                var posX, posY;
-                if ( pos.x > 0 ) {
-                    posX = Math.round( ( pos.x / 100 ) * canvas.width ) - Math.round( targetW / 2 );
-                } else {
-                    posX = Math.round( ( pos.x / 100 ) * canvas.width ) + Math.round( targetW / 2 );
-                }
-                posY = Math.round( ( pos.y / 100 ) * canvas.height );
-
-                ctx.drawImage( printImg, posX, posY, targetW, targetH );
+            var print = new Image();
+            print.crossOrigin = 'anonymous';
+            print.onload = function () {
+                var tw = Math.round( ( pos.width / 100 ) * cv.width );
+                var th = Math.round( tw * print.naturalHeight / print.naturalWidth );
+                var px = pos.x > 0
+                    ? Math.round( ( pos.x / 100 ) * cv.width ) - Math.round( tw / 2 )
+                    : Math.round( ( pos.x / 100 ) * cv.width ) + Math.round( tw / 2 );
+                var py = Math.round( ( pos.y / 100 ) * cv.height );
+                ctx.drawImage( print, px, py, tw, th );
             };
-
-            printImg.onerror = function () { /* silently skip */ };
-            printImg.src = printUrl + '?nocache=' + Date.now();
+            print.onerror = function () {};
+            print.src = printUrl + '?t=' + Date.now();
         };
-
-        baseImg.onerror = function () {
-            $( canvas ).hide();
-            $noBase.show();
-        };
-
-        baseImg.src = baseUrl + '?nocache=' + Date.now();
+        base.onerror = function () { $( cv ).hide(); if ( noBase ) $( noBase ).show(); };
+        base.src = baseUrl + '?t=' + Date.now();
     }
 
-    // ── Step 6 — Review & Create ─────────────────────────────────────────────
+    // ── Create product ────────────────────────────────────────────────────────
 
-    function renderStep6() {
-        var totalVariations = 0;
-        state.selectedTips.forEach( function ( tip ) {
-            var tc = state.tipConfigs[ tip.slug ];
-            totalVariations += tc.bojas.length * tc.velicinas.length;
-        } );
+    function createProduct() {
+        $btnNext.prop( 'disabled', true ).text( 'Creating…' );
+        $errMsg.text( '' );
 
-        var html = '<div class="wizard-step" data-step="6">';
-        html += '<h2 class="step-title">' + esc( i18n.step_labels[5] ) + '</h2>';
-        html += '<p class="step-subtitle">Review your configuration below. Click <strong>'
-              + esc( cfg.edit_data ? i18n.update : i18n.create ) + '</strong> to create the products.</p>';
-
-        // Summary card
-        html += '<div class="wiz-review-card">';
-        html += '<div class="review-row"><span class="review-label">Design</span><span class="review-val">' + esc( state.designName ) + '</span></div>';
-        html += '<div class="review-row"><span class="review-label">Products</span><span class="review-val">' + state.selectedTips.length + ' (' + state.selectedTips.map( function (t) { return t.name; } ).join( ', ' ) + ')</span></div>';
-        html += '<div class="review-row"><span class="review-label">Total Variations</span><span class="review-val"><strong>' + totalVariations + '</strong></span></div>';
-        html += '<div class="review-row"><span class="review-label">Front Print</span><span class="review-val">'
-              + ( state.printFrontId ? '✓ uploaded' : '<span class="wiz-missing">missing</span>' ) + '</span></div>';
-        html += '<div class="review-row"><span class="review-label">Back Print</span><span class="review-val">'
-              + ( state.printBackId ? '✓ uploaded' : 'none (front only)' ) + '</span></div>';
-        html += '</div>';
-
-        // Per-tip breakdown
-        state.selectedTips.forEach( function ( tip ) {
-            var tc = state.tipConfigs[ tip.slug ];
-            html += '<div class="wiz-review-tip">';
-            html += '<div class="review-tip-header">' + esc( tip.name ) + '</div>';
-            html += '<div class="review-tip-body">';
-            html += '<div class="review-row"><span class="review-label">Colors</span><span class="review-val">' + tc.bojas.length + ' selected</span></div>';
-            html += '<div class="review-row"><span class="review-label">Sizes</span><span class="review-val">' + tc.velicinas.map( function (v) { var term = (cfg.velicinas||[]).find( function(t) { return t.slug === v; }); return term ? term.name : v; } ).join( ', ' ) + '</span></div>';
-            html += '<div class="review-row"><span class="review-label">Regular Price</span><span class="review-val">' + get_woocommerce_currency_symbol() + tc.regularPrice + '</span></div>';
-            if ( tc.salePrice !== null ) {
-                html += '<div class="review-row"><span class="review-label">Sale Price</span><span class="review-val">' + get_woocommerce_currency_symbol() + tc.salePrice + '</span></div>';
-            }
-            html += '<div class="review-row"><span class="review-label">Variations</span><span class="review-val"><strong>' + ( tc.bojas.length * tc.velicinas.length ) + '</strong></span></div>';
-            html += '</div></div>';
-        } );
-
-        // Result area (populated after create)
-        html += '<div id="wizard-result" class="wizard-result" style="display:none;"></div>';
-
-        html += '</div>';
-        $body.html( html );
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Create products (AJAX)
-    // ─────────────────────────────────────────────────────────────────────────
-
-    function createProducts() {
-        $btnNext.prop( 'disabled', true ).text( i18n.creating );
-        clearError();
-
-        var tipsList = state.selectedTips.map( function ( tip ) {
-            var tc = state.tipConfigs[ tip.slug ];
-            return {
-                tip_slug      : tip.slug,
-                boja_slugs    : tc.bojas,
-                velicina_slugs: tc.velicinas,
-                regular_price : tc.regularPrice,
-                sale_price    : tc.salePrice,
-                pos_front     : tc.posFront,
-                pos_back      : tc.posBack,
-            };
+        var tipColorsPayload = {};
+        S.tipSlugs.forEach( function ( t ) {
+            tipColorsPayload[ t ] = Object.keys( S.tipColors[ t ] || {} )
+                .filter( function ( b ) { return ( S.tipColors[ t ] || {} )[ b ].selected; } )
+                .map( function ( b ) { return { slug: b, light_print: !! ( S.tipColors[ t ] || {} )[ b ].lightPrint }; } );
         } );
 
         var payload = {
-            design_name   : state.designName,
-            print_front_id: state.printFrontId,
-            print_back_id : state.printBackId || 0,
-            tips          : tipsList,
+            name          : S.name,
+            tip_slugs     : S.tipSlugs,
+            tip_colors    : tipColorsPayload,
+            tip_sizes     : S.tipSizes,
+            tip_prices    : S.tipPrices,
+            tip_positions : S.tipPositions,
+            print_front_id: S.printFrontId,
+            print_light_id: S.printLightId || 0,
+            print_back_id : S.printBackId  || 0,
         };
 
-        $.post( cfg.ajax_url, {
+        $.post( d.ajax_url, {
             action      : 'thready_wizard_create',
-            _ajax_nonce : cfg.nonce,
+            _ajax_nonce : d.nonce,
             payload     : JSON.stringify( payload ),
         } )
         .done( function ( res ) {
             $btnNext.prop( 'disabled', false );
-
             if ( res.success ) {
-                showCreateResults( res.data.results );
+                showResult( res.data );
             } else {
-                $btnNext.text( i18n.create );
-                showError( res.data && res.data.message ? res.data.message : 'Create failed.' );
-                if ( res.data && res.data.results ) {
-                    showCreateResults( res.data.results );
-                }
+                $btnNext.text( 'Create Product' );
+                $errMsg.text( ( res.data && res.data.message ) || 'Create failed.' );
             }
         } )
         .fail( function () {
-            $btnNext.prop( 'disabled', false ).text( i18n.create );
-            showError( 'Server error. Please try again.' );
+            $btnNext.prop( 'disabled', false ).text( 'Create Product' );
+            $errMsg.text( 'Server error. Please try again.' );
         } );
     }
 
-    function showCreateResults( results ) {
-        var $result = $( '#wizard-result' ).show();
-        var html = '<h3 class="result-title">Results</h3>';
-
-        results.forEach( function ( r ) {
-            if ( r.success ) {
-                html += '<div class="result-item result-ok">';
-                html += '✓ <strong>' + esc( r.tip_name ) + '</strong> — '
-                      + r.variation_count + ' variations created. ';
-                html += '<a href="' + esc( r.edit_url ) + '" class="button button-small">Edit</a> ';
-                html += '<a href="' + esc( r.view_url ) + '" class="button button-small" target="_blank">View</a>';
-                html += '</div>';
-            } else {
-                html += '<div class="result-item result-err">';
-                html += '✗ <strong>' + esc( r.tip_name ) + '</strong> — ' + esc( r.message );
-                html += '</div>';
-            }
-        } );
-
-        var allOk = results.every( function (r) { return r.success; } );
-        if ( allOk ) {
-            html += '<a href="' + esc( cfg.products_url ) + '" class="button button-primary result-back-btn">← Back to Products</a>';
-            $btnNext.hide();
-            $btnBack.hide();
-        }
-
-        $result.html( html );
-        $result[0].scrollIntoView( { behavior: 'smooth' } );
+    function showResult( data ) {
+        $btnNext.hide(); $btnBack.hide();
+        var h = '<div class="result-item result-ok">';
+        h += '✓ <strong>' + esc( S.name ) + '</strong> created — ' + data.variation_count + ' variations. ';
+        h += '<a href="' + esc( data.edit_url ) + '" class="button button-small">Edit</a> ';
+        h += '<a href="' + esc( data.view_url ) + '" class="button button-small" target="_blank">View</a>';
+        h += '</div>';
+        h += '<a href="' + esc( d.products_url ) + '" class="button button-primary" style="margin-top:12px">← Back to Products</a>';
+        $( '#wiz-result' ).html( h ).show();
+        $( '#wiz-result' )[0].scrollIntoView( { behavior: 'smooth' } );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Utility
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Utility ───────────────────────────────────────────────────────────────
 
-    function showError( msg ) {
-        $errMsg.text( msg ).show();
+    function getTip( slug ) {
+        return ( d.tips || [] ).find( function ( t ) { return t.slug === slug; } ) || { slug: slug, name: slug };
     }
 
-    function clearError() {
-        $errMsg.text( '' ).hide();
+    function getBoja( slug ) {
+        return ( d.bojas || [] ).find( function ( b ) { return b.slug === slug; } ) || { slug: slug, name: slug };
     }
 
-    function esc( str ) {
-        return $( '<span>' ).text( str ).html();
+    function getFirstSelectedBoja( tipSlug ) {
+        var colors = S.tipColors[ tipSlug ] || {};
+        return Object.keys( colors ).find( function ( b ) { return colors[ b ].selected; } ) || '';
     }
 
-    function get_woocommerce_currency_symbol() {
-        // WooCommerce doesn't expose this to JS by default.
-        // We output it from PHP as a data attribute on the wizard container.
-        return $( '#thready-wizard' ).data( 'currency' ) || '€';
-    }
+    function esc( s ) { return $( '<span>' ).text( String( s ) ).html(); }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Button handlers
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Global button handlers ────────────────────────────────────────────────
 
-    $btnNext.on( 'click', function () {
-        if ( state.step === 6 ) {
-            createProducts();
-            return;
-        }
-
-        if ( validate( state.step ) ) {
-            goTo( state.step + 1 );
-        }
-    } );
+    $btnNext.on( 'click', proceed );
 
     $btnBack.on( 'click', function () {
-        if ( state.step > 1 ) {
-            goTo( state.step - 1 );
-        }
+        if ( S.stepIndex > 0 ) goTo( S.stepIndex - 1 );
     } );
 
-    // Allow clicking done steps to jump back
     $( document ).on( 'click', '.wizard-step-indicator.done', function () {
-        var n = parseInt( $( this ).data( 'step' ), 10 );
-        if ( n < state.step ) goTo( n );
+        goTo( parseInt( $( this ).data( 'step-index' ), 10 ) );
     } );
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Init
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Init ──────────────────────────────────────────────────────────────────
 
-    // Pass currency symbol from PHP via data attribute
-    ( function injectCurrencySymbol() {
-        // We need to add this to the wizard HTML via PHP — see render_page()
-        // For now, detect from WooCommerce localized data if available
-        if ( window.woocommerce_params && window.woocommerce_params.currency_symbol ) {
-            $( '#thready-wizard' ).data( 'currency', window.woocommerce_params.currency_symbol );
-        }
-    }() );
-
-    goTo( 1 );
+    S.dynamicSteps = [ { id: 'setup', type: 'setup', label: 'Setup', sublabel: '' } ];
+    S.stepIndex    = 0;
+    rebuildStepIndicator();
+    goTo( 0 );
 
 }( jQuery ) );
