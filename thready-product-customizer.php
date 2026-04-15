@@ -30,6 +30,10 @@ require_once THREADY_PC_PATH . 'includes/class-image-handler.php';
 require_once THREADY_PC_PATH . 'includes/class-ajax-handler.php';
 require_once THREADY_PC_PATH . 'includes/class-frontend-handler.php';
 
+// New system
+require_once THREADY_PC_PATH . 'includes/class-mockup-library.php';
+require_once THREADY_PC_PATH . 'includes/class-variation-factory.php';
+
 // Couple Mode (admin toggle)
 require_once THREADY_PC_PATH . 'includes/class-couple-mode-admin.php';
 
@@ -56,6 +60,9 @@ add_action('plugins_loaded', function () {
     Thready_Ajax_Handler::init();
     Thready_Frontend_Handler::init();
 
+    // New system
+    Thready_Mockup_Library::init();
+
     new Thready_Couple_Mode_Admin();
     Thready_Couple_Mode_Variations_Admin::init();
     Thready_Couple_Mode_Cart::init();
@@ -66,7 +73,7 @@ add_action('plugins_loaded', function () {
     }
 });
 
-// Create merged images directory
+// Create merged images directory + mockup DB table
 register_activation_hook(__FILE__, function () {
     $upload_dir = wp_upload_dir();
     $custom_dir = $upload_dir['basedir'] . '/thready-merged';
@@ -86,4 +93,8 @@ register_activation_hook(__FILE__, function () {
     if (!file_exists($index_php)) {
         file_put_contents($index_php, "<?php\n// Silence is golden\n");
     }
+
+    // Create mockup library table
+    require_once plugin_dir_path(__FILE__) . 'includes/class-mockup-library.php';
+    Thready_Mockup_Library::create_table();
 });
