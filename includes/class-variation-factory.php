@@ -20,6 +20,84 @@ class Thready_Variation_Factory {
 
     const BATCH_SIZE = 50;
 
+    /**
+     * Register hooks for auto-generating thumbnails when variations are
+     * created / saved via the standard WooCommerce product-edit screen.
+     */
+    public static function init() {
+        add_action( 'woocommerce_save_product_variation', [ __CLASS__, 'on_variation_save' ], 20, 2 );
+    }
+
+    /**
+     * After a variation is saved from the WooCommerce product-edit screen,
+     * generate its 150×150 front (and optionally back) thumbnail using the
+     * tip_positions stored on the parent product — so the admin doesn't have
+     * to re-enter positioning data for manually added variations.
+     */
+    public static function on_variation_save( $variation_id, $index ) {
+        $variation = wc_get_product( $variation_id );
+        if ( ! $variation ) return;
+
+        $product_id = $variation->get_parent_id();
+        if ( ! $product_id ) return;
+
+        // Only canvas-mode products
+        if ( get_post_meta( $product_id, self::META_RENDER_MODE, true ) !== 'canvas' ) return;
+
+        // Already has a thumbnail? Skip to avoid regenerating on every save.
+        $existing_thumb = (int) get_post_meta( $variation_id, '_thumbnail_id', true );
+        if ( $existing_thumb && wp_attachment_is_image( $existing_thumb ) ) return;
+
+        // Read slugs directly from postmeta — get_attribute() returns the
+        // term NAME for taxonomy attributes, which breaks mockup lookups
+        // when color names contain ž/č/ć/š.
+        $tip_slug  = (string) get_post_meta( $variation_id, 'attribute_' . THREADY_TAX_TIP,  true );
+        $boja_slug = (string) get_post_meta( $variation_id, 'attribute_' . THREADY_TAX_BOJA, true );
+        if ( ! $tip_slug || ! $boja_slug ) return;
+
+        $mockup = Thready_Mockup_Library::get_urls( $tip_slug, $boja_slug );
+        if ( ! $mockup || ! $mockup['front'] ) return;
+
+        $positions_raw = get_post_meta( $product_id, self::META_TIP_POSITIONS, true );
+        $tip_positions = $positions_raw ? json_decode( $positions_raw, true ) : [];
+        $pos_front     = $tip_positions[ $tip_slug ]['front'] ?? [ 'x' => 50, 'y' => 25, 'width' => 50 ];
+
+        $front_print_id = (int) get_post_meta( $product_id, self::META_PRINT_FRONT, true );
+        $light_print_id = (int) get_post_meta( $product_id, self::META_PRINT_LIGHT, true );
+        $use_light      = get_post_meta( $variation_id, '_thready_use_light_print', true ) === 'yes';
+        $print_id       = ( $use_light && $light_print_id ) ? $light_print_id : $front_print_id;
+        if ( ! $print_id ) return;
+
+        // Generate front thumbnail
+        $front_attach = Thready_Image_Handler::generate_merged_image(
+            $product_id, $variation_id,
+            [ 'print_x' => $pos_front['x'], 'print_y' => $pos_front['y'],
+              'print_width' => $pos_front['width'], 'base_image' => $mockup['front'] ],
+            $print_id, 'front', 150
+        );
+
+        if ( $front_attach && ! is_wp_error( $front_attach ) ) {
+            $variation->set_image_id( $front_attach );
+            $variation->save();
+        }
+
+        // Generate back thumbnail if back print + back mockup exist
+        $back_print_id = (int) get_post_meta( $product_id, self::META_PRINT_BACK, true );
+        if ( $back_print_id && ! empty( $mockup['back'] ) ) {
+            $pos_back = $tip_positions[ $tip_slug ]['back'] ?? [ 'x' => 50, 'y' => 25, 'width' => 50 ];
+            $back_attach = Thready_Image_Handler::generate_merged_image(
+                $product_id, $variation_id,
+                [ 'print_x' => $pos_back['x'], 'print_y' => $pos_back['y'],
+                  'print_width' => $pos_back['width'], 'base_image' => $mockup['back'] ],
+                $back_print_id, 'back', 150
+            );
+
+            if ( $back_attach && ! is_wp_error( $back_attach ) ) {
+                update_post_meta( $variation_id, '_thready_back_thumb_id', $back_attach );
+            }
+        }
+    }
+
     // -------------------------------------------------------------------------
     // create_product
     // -------------------------------------------------------------------------
@@ -54,17 +132,20 @@ class Thready_Variation_Factory {
      */
     public static function create_product( array $args ) {
         $args = wp_parse_args( $args, [
-            'name'          => '',
-            'tip_slugs'     => [],
-            'tip_colors'    => [],
-            'tip_sizes'     => [],
-            'tip_prices'    => [],
-            'tip_positions' => [],
-            'print_front_id'=> 0,
-            'print_light_id'=> null,
-            'print_back_id' => null,
-            'description'   => '',
-            'status'        => 'publish',
+            'name'               => '',
+            'tip_slugs'          => [],
+            'tip_colors'         => [],
+            'tip_sizes'          => [],
+            'tip_prices'         => [],
+            'tip_positions'      => [],
+            'print_front_id'     => 0,
+            'print_light_id'     => null,
+            'print_back_id'      => null,
+            'description'        => '',
+            'status'             => 'publish',
+            'featured_tip_slug'  => '',   // tip to use for featured image
+            'featured_boja_slug' => '',   // boja to use for featured image
+            'featured_side'      => 'front',
         ] );
 
         $errors = self::validate( $args );
@@ -116,6 +197,30 @@ class Thready_Variation_Factory {
 
         WC_Product_Variable::sync( $product_id );
         wc_delete_product_transients( $product_id );
+
+        // Set default variation attributes (first tip + first boja)
+        // so canvas fires on page load without customer interaction
+        $first_tip  = $args['tip_slugs'][0] ?? '';
+        $first_boja = $args['tip_colors'][ $first_tip ][0]['slug'] ?? '';
+        if ( $first_tip && $first_boja ) {
+            self::set_default_attributes( $product_id, $first_tip, $first_boja );
+        }
+
+        // Pre-generate 150×150 variation thumbnails (cart, email, admin, gallery nav)
+        self::generate_variation_thumbnails( $product_id );
+
+        // Generate 800×800 featured image
+        if ( $args['featured_tip_slug'] && $args['featured_boja_slug'] ) {
+            $featured_id = self::generate_featured_image(
+                $product_id,
+                $args['featured_tip_slug'],
+                $args['featured_boja_slug'],
+                $args['featured_side']
+            );
+            if ( $featured_id && ! is_wp_error( $featured_id ) ) {
+                set_post_thumbnail( $product_id, $featured_id );
+            }
+        }
 
         return $product_id;
     }
@@ -338,6 +443,192 @@ class Thready_Variation_Factory {
             'print_back'       => (int) get_post_meta( $product_id, self::META_PRINT_BACK,  true ),
             'tip_positions'    => $positions_raw ? json_decode( $positions_raw, true ) : [],
         ];
+    }
+
+    // =========================================================================
+    // Ordering, default attributes, image generation
+    // =========================================================================
+
+    /**
+     * Get attribute terms in the order configured in WC > Attributes.
+     *
+     * Delegates to WooCommerce's own ordering (wc_attribute_orderby +
+     * wc_terms_clauses filter) so the result matches exactly what the
+     * dropdowns and swatches use everywhere else on the site.
+     *
+     * Respects whichever "Default sort order" the attribute is set to:
+     *   - Custom ordering (drag-and-drop → order_{taxonomy} term meta)
+     *   - Term ID
+     *   - Name
+     *   - Name (numeric)
+     */
+    public static function get_ordered_terms( $taxonomy ) {
+        $args = [
+            'taxonomy'   => $taxonomy,
+            'hide_empty' => false,
+        ];
+
+        // Only WC attribute taxonomies support the menu_order argument.
+        if ( function_exists( 'wc_attribute_orderby' ) && function_exists( 'taxonomy_is_product_attribute' ) && taxonomy_is_product_attribute( $taxonomy ) ) {
+            $orderby = wc_attribute_orderby( $taxonomy );
+
+            switch ( $orderby ) {
+                case 'name':
+                    $args['orderby'] = 'name';
+                    $args['order']   = 'ASC';
+                    break;
+                case 'name_num':
+                    $args['orderby'] = 'name_num';
+                    $args['order']   = 'ASC';
+                    break;
+                case 'id':
+                    $args['orderby'] = 'id';
+                    $args['order']   = 'ASC';
+                    break;
+                case 'menu_order':
+                default:
+                    // Custom (drag-and-drop) ordering — handled by WC's
+                    // wc_terms_clauses() filter which joins order_{taxonomy}
+                    // meta via LEFT JOIN so terms without meta still appear.
+                    $args['menu_order'] = 'ASC';
+                    break;
+            }
+        } else {
+            $args['orderby'] = 'name';
+            $args['order']   = 'ASC';
+        }
+
+        $terms = get_terms( $args );
+        return is_wp_error( $terms ) ? [] : $terms;
+    }
+
+    /**
+     * Set WooCommerce default variation attributes so canvas fires on page load.
+     */
+    public static function set_default_attributes( $product_id, $tip_slug, $boja_slug ) {
+        $product = wc_get_product( $product_id );
+        if ( ! $product ) return;
+
+        $product->set_default_attributes( [
+            THREADY_TAX_TIP  => sanitize_title( $tip_slug  ),
+            THREADY_TAX_BOJA => sanitize_title( $boja_slug ),
+        ] );
+        $product->save();
+    }
+
+    /**
+     * Pre-generate 150×150 merged thumbnails for every variation.
+     * Sets the result as the variation image (used in cart, email, admin, gallery nav).
+     * Also generates back thumbnail and stores it as _thready_back_thumb_id.
+     *
+     * @return int  Number of variations processed.
+     */
+    public static function generate_variation_thumbnails( $product_id ) {
+        global $wpdb;
+
+        $tip_key  = 'attribute_' . THREADY_TAX_TIP;
+        $boja_key = 'attribute_' . THREADY_TAX_BOJA;
+
+        $rows = $wpdb->get_results( $wpdb->prepare( "
+            SELECT p.ID,
+                   MAX( CASE WHEN pm.meta_key = %s                        THEN pm.meta_value END ) AS tip,
+                   MAX( CASE WHEN pm.meta_key = %s                        THEN pm.meta_value END ) AS boja,
+                   MAX( CASE WHEN pm.meta_key = '_thready_use_light_print' THEN pm.meta_value END ) AS light_print
+            FROM   {$wpdb->posts} p
+            JOIN   {$wpdb->postmeta} pm ON pm.post_id = p.ID
+            WHERE  p.post_parent = %d
+            AND    p.post_type   = 'product_variation'
+            AND    p.post_status = 'publish'
+            GROUP  BY p.ID
+        ", $tip_key, $boja_key, $product_id ) );
+
+        $positions_raw = get_post_meta( $product_id, self::META_TIP_POSITIONS, true );
+        $tip_positions = $positions_raw ? json_decode( $positions_raw, true ) : [];
+
+        $front_print_id = (int) get_post_meta( $product_id, self::META_PRINT_FRONT, true );
+        $light_print_id = (int) get_post_meta( $product_id, self::META_PRINT_LIGHT, true );
+        $back_print_id  = (int) get_post_meta( $product_id, self::META_PRINT_BACK,  true );
+
+        $generated = 0;
+
+        foreach ( $rows as $row ) {
+            if ( ! $row->tip || ! $row->boja ) continue;
+
+            $mockup = Thready_Mockup_Library::get_urls( $row->tip, $row->boja );
+            if ( ! $mockup || ! $mockup['front'] ) continue;
+
+            // Determine which front print to use
+            $use_light  = $row->light_print === 'yes';
+            $print_id   = ( $use_light && $light_print_id ) ? $light_print_id : $front_print_id;
+            if ( ! $print_id ) continue;
+
+            $pos_front = $tip_positions[ $row->tip ]['front'] ?? [ 'x' => 50, 'y' => 25, 'width' => 50 ];
+
+            // Generate FRONT thumbnail
+            $front_attach = Thready_Image_Handler::generate_merged_image(
+                $product_id, (int) $row->ID,
+                [ 'print_x' => $pos_front['x'], 'print_y' => $pos_front['y'],
+                  'print_width' => $pos_front['width'], 'base_image' => $mockup['front'] ],
+                $print_id, 'front', 150
+            );
+
+            if ( $front_attach && ! is_wp_error( $front_attach ) ) {
+                $var = wc_get_product( (int) $row->ID );
+                if ( $var ) { $var->set_image_id( $front_attach ); $var->save(); }
+                $generated++;
+            }
+
+            // Generate BACK thumbnail (if back print + back base image exist)
+            if ( $back_print_id && $mockup['back'] ) {
+                $pos_back = $tip_positions[ $row->tip ]['back'] ?? [ 'x' => 50, 'y' => 25, 'width' => 50 ];
+
+                $back_attach = Thready_Image_Handler::generate_merged_image(
+                    $product_id, (int) $row->ID,
+                    [ 'print_x' => $pos_back['x'], 'print_y' => $pos_back['y'],
+                      'print_width' => $pos_back['width'], 'base_image' => $mockup['back'] ],
+                    $back_print_id, 'back', 150
+                );
+
+                if ( $back_attach && ! is_wp_error( $back_attach ) ) {
+                    update_post_meta( (int) $row->ID, '_thready_back_thumb_id', $back_attach );
+                }
+            }
+        }
+
+        return $generated;
+    }
+
+    /**
+     * Generate an 800×800 merged image for a specific tip+boja+side combination.
+     * Used as the product featured image.
+     *
+     * @return int|WP_Error  Attachment ID on success.
+     */
+    public static function generate_featured_image( $product_id, $tip_slug, $boja_slug, $side = 'front' ) {
+        $mockup = Thready_Mockup_Library::get_urls( $tip_slug, $boja_slug );
+        if ( ! $mockup ) return new WP_Error( 'no_mockup', 'No mockup found.' );
+
+        $base_url = $side === 'back' ? ( $mockup['back'] ?: $mockup['front'] ) : $mockup['front'];
+        if ( ! $base_url ) return new WP_Error( 'no_base', 'No base image.' );
+
+        $positions_raw = get_post_meta( $product_id, self::META_TIP_POSITIONS, true );
+        $tip_positions = $positions_raw ? json_decode( $positions_raw, true ) : [];
+        $pos           = $tip_positions[ $tip_slug ][ $side ] ?? [ 'x' => 50, 'y' => 25, 'width' => 50 ];
+
+        if ( $side === 'back' ) {
+            $print_id = (int) get_post_meta( $product_id, self::META_PRINT_BACK, true );
+        } else {
+            $print_id = (int) get_post_meta( $product_id, self::META_PRINT_FRONT, true );
+        }
+
+        if ( ! $print_id ) return new WP_Error( 'no_print', 'No print image.' );
+
+        return Thready_Image_Handler::generate_merged_image(
+            $product_id, 0,
+            [ 'print_x' => $pos['x'], 'print_y' => $pos['y'],
+              'print_width' => $pos['width'], 'base_image' => $base_url ],
+            $print_id, 'featured', 800
+        );
     }
 
     // =========================================================================

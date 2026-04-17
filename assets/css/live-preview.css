@@ -3,25 +3,48 @@
    Canvas loading overlay + front/back toggle button
    ========================================================================== */
 
+/* ── Prevent double modals ───────────────────────────────────────── */
+
+.slbElement:not(.slbThready) { display: none !important; }
+
 /* ── Loading state on gallery ───────────────────────────────────────── */
+
 .thready-canvas-loading {
-    position: relative;
+    position: relative !important;
+}
+
+.thready-canvas-loading img {
+    visibility: hidden !important;
 }
 
 .thready-canvas-loading::after {
     content: '';
     position: absolute;
     inset: 0;
-    background: rgba(255, 255, 255, 0.55);
-    z-index: 10;
+    background: #ffffff;
+    z-index: 999;
     border-radius: inherit;
-    animation: thready-canvas-pulse 0.9s ease infinite alternate;
     pointer-events: none;
 }
 
-@keyframes thready-canvas-pulse {
-    from { opacity: 0.3; }
-    to   { opacity: 0.8; }
+.thready-canvas-loading::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 42px;
+    height: 42px;
+    margin: -21px 0 0 -21px;
+    border: 3px solid #eeeeee;
+    border-top-color: #cf2929;
+    border-radius: 50%;
+    animation: thready-canvas-spin 0.8s linear infinite;
+    z-index: 1000;
+    pointer-events: none;
+}
+
+@keyframes thready-canvas-spin {
+    to { transform: rotate(360deg); }
 }
 
 /* ── Front / Back toggle ────────────────────────────────────────────── */

@@ -84,7 +84,7 @@ class Thready_Product_Wizard {
 
     private static function build_js_data() {
         // pa_tip-proizvoda terms
-        $tip_terms = get_terms( [ 'taxonomy' => THREADY_TAX_TIP, 'hide_empty' => false, 'orderby' => 'name' ] );
+        $tip_terms = Thready_Variation_Factory::get_ordered_terms( THREADY_TAX_TIP );
         $tips = [];
         if ( ! is_wp_error( $tip_terms ) ) {
             foreach ( $tip_terms as $t ) {
@@ -93,7 +93,7 @@ class Thready_Product_Wizard {
         }
 
         // pa_boja terms with hex color
-        $boja_terms = get_terms( [ 'taxonomy' => THREADY_TAX_BOJA, 'hide_empty' => false, 'orderby' => 'name' ] );
+        $boja_terms = Thready_Variation_Factory::get_ordered_terms( THREADY_TAX_BOJA );
         $bojas = [];
         if ( ! is_wp_error( $boja_terms ) ) {
             foreach ( $boja_terms as $t ) {
@@ -106,7 +106,7 @@ class Thready_Product_Wizard {
         }
 
         // pa_velicina terms
-        $velicina_terms = get_terms( [ 'taxonomy' => THREADY_TAX_VELICINA, 'hide_empty' => false, 'orderby' => 'name' ] );
+        $velicina_terms = Thready_Variation_Factory::get_ordered_terms( THREADY_TAX_VELICINA );
         $velicinas = [];
         if ( ! is_wp_error( $velicina_terms ) ) {
             foreach ( $velicina_terms as $t ) {
@@ -286,16 +286,22 @@ class Thready_Product_Wizard {
             $tip_sizes[ sanitize_title( $tip_slug ) ] = array_map( 'sanitize_title', (array) $sizes );
         }
 
+        $featured_side = sanitize_key( $raw['featured_side'] ?? 'front' );
+        if ( ! in_array( $featured_side, [ 'front', 'back' ], true ) ) $featured_side = 'front';
+
         $product_id = Thready_Variation_Factory::create_product( [
-            'name'           => sanitize_text_field( $raw['name']           ?? '' ),
-            'tip_slugs'      => array_map( 'sanitize_title', $raw['tip_slugs'] ?? [] ),
-            'tip_colors'     => $tip_colors,
-            'tip_sizes'      => $tip_sizes,
-            'tip_prices'     => $raw['tip_prices']    ?? [],
-            'tip_positions'  => $raw['tip_positions'] ?? [],
-            'print_front_id' => absint( $raw['print_front_id'] ?? 0 ),
-            'print_light_id' => absint( $raw['print_light_id'] ?? 0 ) ?: null,
-            'print_back_id'  => absint( $raw['print_back_id']  ?? 0 ) ?: null,
+            'name'               => sanitize_text_field( $raw['name']           ?? '' ),
+            'tip_slugs'          => array_map( 'sanitize_title', $raw['tip_slugs'] ?? [] ),
+            'tip_colors'         => $tip_colors,
+            'tip_sizes'          => $tip_sizes,
+            'tip_prices'         => $raw['tip_prices']    ?? [],
+            'tip_positions'      => $raw['tip_positions'] ?? [],
+            'print_front_id'     => absint( $raw['print_front_id'] ?? 0 ),
+            'print_light_id'     => absint( $raw['print_light_id'] ?? 0 ) ?: null,
+            'print_back_id'      => absint( $raw['print_back_id']  ?? 0 ) ?: null,
+            'featured_tip_slug'  => sanitize_title( $raw['featured_tip_slug']  ?? '' ),
+            'featured_boja_slug' => sanitize_title( $raw['featured_boja_slug'] ?? '' ),
+            'featured_side'      => $featured_side,
         ] );
 
         if ( is_wp_error( $product_id ) ) {

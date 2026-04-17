@@ -62,12 +62,34 @@ class Thready_Mockup_Library {
         return $wpdb->prefix . self::TABLE_SUFFIX;
     }
 
+    /**
+     * Normalize a slug for lookup — transliterate accents so that
+     * "bež" / "bez" / "bez" all resolve to the same row.
+     */
+    private static function normalize_slug( $slug ) {
+        return sanitize_title( remove_accents( (string) $slug ) );
+    }
+
     public static function get( $tip_slug, $boja_slug ) {
         global $wpdb;
-        return $wpdb->get_row( $wpdb->prepare(
+        $row = $wpdb->get_row( $wpdb->prepare(
             'SELECT * FROM ' . self::table() . ' WHERE tip_slug = %s AND boja_slug = %s',
             $tip_slug, $boja_slug
         ) );
+
+        // Fallback: try normalized (accent-stripped) slugs
+        if ( ! $row ) {
+            $n_tip  = self::normalize_slug( $tip_slug );
+            $n_boja = self::normalize_slug( $boja_slug );
+            if ( $n_tip !== $tip_slug || $n_boja !== $boja_slug ) {
+                $row = $wpdb->get_row( $wpdb->prepare(
+                    'SELECT * FROM ' . self::table() . ' WHERE tip_slug = %s AND boja_slug = %s',
+                    $n_tip, $n_boja
+                ) );
+            }
+        }
+
+        return $row;
     }
 
     public static function get_for_tip( $tip_slug ) {
@@ -75,6 +97,16 @@ class Thready_Mockup_Library {
         $rows = $wpdb->get_results( $wpdb->prepare(
             'SELECT * FROM ' . self::table() . ' WHERE tip_slug = %s', $tip_slug
         ) );
+
+        if ( empty( $rows ) ) {
+            $n_tip = self::normalize_slug( $tip_slug );
+            if ( $n_tip !== $tip_slug ) {
+                $rows = $wpdb->get_results( $wpdb->prepare(
+                    'SELECT * FROM ' . self::table() . ' WHERE tip_slug = %s', $n_tip
+                ) );
+            }
+        }
+
         $map = [];
         foreach ( $rows as $row ) $map[ $row->boja_slug ] = $row;
         return $map;
@@ -318,7 +350,7 @@ class Thready_Mockup_Library {
             return;
         }
 
-        $active_tip  = isset( $_GET['tip'] ) ? sanitize_key( $_GET['tip'] ) : $tip_terms[0]->slug;
+        $active_tip  = isset( $_GET['tip'] ) ? sanitize_title( wp_unslash( $_GET['tip'] ) ) : $tip_terms[0]->slug;
         $valid_slugs = wp_list_pluck( $tip_terms, 'slug' );
         if ( ! in_array( $active_tip, $valid_slugs, true ) ) $active_tip = $tip_terms[0]->slug;
 
@@ -447,8 +479,8 @@ class Thready_Mockup_Library {
         check_ajax_referer( 'thready_mockup_nonce' );
         if ( ! current_user_can( 'manage_woocommerce' ) ) wp_send_json_error( [], 403 );
 
-        $tip_slug  = sanitize_key( wp_unslash( $_POST['tip_slug']  ?? '' ) );
-        $boja_slug = sanitize_key( wp_unslash( $_POST['boja_slug'] ?? '' ) );
+        $tip_slug  = sanitize_title( wp_unslash( $_POST['tip_slug']  ?? '' ) );
+        $boja_slug = sanitize_title( wp_unslash( $_POST['boja_slug'] ?? '' ) );
         $slot      = sanitize_key( wp_unslash( $_POST['slot']      ?? '' ) );
         $image_id  = absint( $_POST['image_id'] ?? 0 );
 
@@ -458,9 +490,12 @@ class Thready_Mockup_Library {
         if ( $image_id && ! wp_attachment_is_image( $image_id ) )
             wp_send_json_error( [ 'message' => 'Invalid image' ] );
 
-        // Auto-rename the attachment to the correct mockup convention
+        // Copy to thready-mockups as a NEW attachment — original stays untouched
         if ( $image_id ) {
-            self::auto_rename_attachment( $image_id, $tip_slug, $boja_slug, $slot );
+            $mockup_id = self::copy_to_mockup( $image_id, $tip_slug, $boja_slug, $slot );
+            if ( $mockup_id ) {
+                $image_id = $mockup_id;
+            }
         }
 
         if ( $slot === 'front' ) self::save( $tip_slug, $boja_slug, $image_id, null );
@@ -482,8 +517,8 @@ class Thready_Mockup_Library {
         check_ajax_referer( 'thready_mockup_nonce' );
         if ( ! current_user_can( 'manage_woocommerce' ) ) wp_send_json_error( [], 403 );
 
-        $tip_slug  = sanitize_key( wp_unslash( $_POST['tip_slug']  ?? '' ) );
-        $boja_slug = sanitize_key( wp_unslash( $_POST['boja_slug'] ?? '' ) );
+        $tip_slug  = sanitize_title( wp_unslash( $_POST['tip_slug']  ?? '' ) );
+        $boja_slug = sanitize_title( wp_unslash( $_POST['boja_slug'] ?? '' ) );
         $slot      = sanitize_key( wp_unslash( $_POST['slot']      ?? '' ) );
 
         if ( ! $tip_slug || ! $boja_slug || ! in_array( $slot, [ 'front', 'back' ], true ) )
@@ -520,22 +555,35 @@ class Thready_Mockup_Library {
     }
 
     // -------------------------------------------------------------------------
-    // Auto-rename
+    // Copy to mockup library
     // -------------------------------------------------------------------------
 
     /**
-     * Rename an attachment file to the mockup naming convention:
-     *   {tip-slug}-{boja-slug}-{front|back}.{ext}
+     * Copy an image to thready-mockups as a NEW WordPress attachment.
      *
-     * Updates the physical file, postmeta, and attachment title.
+     * The original media-library attachment is never modified — we copy the
+     * file, create a brand-new attachment post with the mockup naming
+     * convention, and return its ID.
+     *
+     * Naming: {tip-slug}-{boja-slug}-{front|back}.{ext}
+     *
+     * @param  int    $source_id   Original attachment ID (from media library).
+     * @param  string $tip_slug    Product-type slug.
+     * @param  string $boja_slug   Color slug.
+     * @param  string $slot        'front' or 'back'.
+     * @return int|false           New attachment ID on success, false on failure.
      */
-    private static function auto_rename_attachment( $attachment_id, $tip_slug, $boja_slug, $slot ) {
-        $filepath = get_attached_file( $attachment_id );
-        if ( ! $filepath || ! file_exists( $filepath ) ) return;
+    private static function copy_to_mockup( $source_id, $tip_slug, $boja_slug, $slot ) {
+        $source_path = get_attached_file( $source_id );
+        if ( ! $source_path || ! file_exists( $source_path ) ) return false;
 
-        $upload_dir   = wp_upload_dir();
-        $ext          = strtolower( pathinfo( $filepath, PATHINFO_EXTENSION ) );
-        $new_filename = $tip_slug . '-' . $boja_slug . '-' . $slot . '.' . $ext;
+        $upload_dir = wp_upload_dir();
+        $ext        = strtolower( pathinfo( $source_path, PATHINFO_EXTENSION ) );
+
+        // ASCII-safe filename
+        $safe_tip  = sanitize_title( remove_accents( $tip_slug ) );
+        $safe_boja = sanitize_title( remove_accents( $boja_slug ) );
+        $new_filename = $safe_tip . '-' . $safe_boja . '-' . $slot . '.' . $ext;
 
         // Ensure thready-mockups directory exists
         $mockup_dir = trailingslashit( $upload_dir['basedir'] ) . self::SCAN_DIR;
@@ -546,33 +594,54 @@ class Thready_Mockup_Library {
         $new_filepath = trailingslashit( $mockup_dir ) . $new_filename;
         $new_relative = self::SCAN_DIR . '/' . $new_filename;
 
-        // Already in the right place with the right name — skip
-        if ( $filepath === $new_filepath ) return;
-
-        // Copy to thready-mockups (keep original in place for WP media library integrity,
-        // but point the attachment to the new location)
-        if ( ! copy( $filepath, $new_filepath ) ) {
-            // Fallback: try rename if copy fails (same filesystem)
-            if ( ! rename( $filepath, $new_filepath ) ) {
-                error_log( "Thready Mockup: could not copy/rename $filepath to $new_filepath" );
-                return;
-            }
+        // If source IS already this exact mockup file, return existing attachment
+        if ( realpath( $source_path ) === realpath( $new_filepath ) ) {
+            return (int) $source_id;
         }
 
-        // Update attachment to point to new file
-        update_post_meta( $attachment_id, '_wp_attached_file', $new_relative );
+        // Check if a mockup attachment already exists at this path
+        $existing_id = self::find_attachment_by_file( $new_filepath );
 
-        // Update attachment title
-        wp_update_post( [
-            'ID'         => $attachment_id,
-            'post_title' => sanitize_file_name( $tip_slug . '-' . $boja_slug . '-' . $slot ),
-            'post_name'  => sanitize_title( $tip_slug . '-' . $boja_slug . '-' . $slot ),
-        ] );
+        // Copy the file (original stays untouched)
+        if ( ! copy( $source_path, $new_filepath ) ) {
+            error_log( "Thready Mockup: could not copy $source_path to $new_filepath" );
+            return false;
+        }
 
-        // Regenerate metadata pointing to new file
+        // If an attachment already existed for this mockup path, update its
+        // metadata to reflect the (possibly new) file content and return it
+        if ( $existing_id ) {
+            require_once ABSPATH . 'wp-admin/includes/image.php';
+            $metadata = wp_generate_attachment_metadata( $existing_id, $new_filepath );
+            wp_update_attachment_metadata( $existing_id, $metadata );
+            return (int) $existing_id;
+        }
+
+        // Create a brand-new attachment for the copy
+        $clean_title = sanitize_file_name( $safe_tip . '-' . $safe_boja . '-' . $slot );
+        $filetype    = wp_check_filetype( $new_filename, null );
+
+        $attach_id = wp_insert_attachment( [
+            'post_mime_type' => $filetype['type'],
+            'post_title'     => $clean_title,
+            'post_name'      => sanitize_title( $clean_title ),
+            'post_content'   => '',
+            'post_status'    => 'inherit',
+        ], $new_filepath );
+
+        if ( is_wp_error( $attach_id ) || ! $attach_id ) {
+            error_log( 'Thready Mockup: attachment creation failed for ' . $new_filepath );
+            return false;
+        }
+
         require_once ABSPATH . 'wp-admin/includes/image.php';
-        $metadata = wp_generate_attachment_metadata( $attachment_id, $new_filepath );
-        wp_update_attachment_metadata( $attachment_id, $metadata );
+        $metadata = wp_generate_attachment_metadata( $attach_id, $new_filepath );
+        wp_update_attachment_metadata( $attach_id, $metadata );
+
+        // Alt text
+        update_post_meta( $attach_id, '_wp_attachment_image_alt', $clean_title );
+
+        return (int) $attach_id;
     }
 
     private static function notice( $type, $message ) {

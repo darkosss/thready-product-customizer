@@ -79,7 +79,7 @@ class Thready_Image_Handler {
         return $sizes;
     }
     
-    public static function generate_merged_image($product_id, $variation_id, $settings, $print_image_id = null, $image_type = 'front') {
+    public static function generate_merged_image($product_id, $variation_id, $settings, $print_image_id = null, $image_type = 'front', $max_dimension = 1200) {
         // Increase memory limit for image processing
         wp_raise_memory_limit('image');
         
@@ -108,8 +108,10 @@ class Thready_Image_Handler {
         $product = wc_get_product($product_id);
         $product_title = $product ? $product->get_name() : 'product';
         
-        // Sanitize the title for filename use
-        $clean_title = sanitize_title($product_title);
+        // Sanitize the title for filename use — explicitly remove accents
+        // first to handle Serbian/Croatian characters (ž, č, ć, š) before
+        // sanitize_title strips them
+        $clean_title = sanitize_title( remove_accents( $product_title ) );
         
         // Get variation attributes for more descriptive filename
         $variation_attributes = [];
@@ -140,8 +142,10 @@ class Thready_Image_Handler {
         if (!empty($variation_attributes)) {
             foreach ($variation_attributes as $attribute) {
                 if (!empty($attribute)) {
-                    $clean_attr = sanitize_title($attribute);
-                    $descriptive_parts[] = substr($clean_attr, 0, 15); // Limit length
+                    $clean_attr = sanitize_title( remove_accents( $attribute ) );
+                    if ( $clean_attr !== '' ) {
+                        $descriptive_parts[] = substr($clean_attr, 0, 15);
+                    }
                 }
             }
         }
@@ -194,7 +198,6 @@ class Thready_Image_Handler {
         $print_height = imagesy($print);
         
         // Optimize: Scale down very large images for faster processing and less memory
-        $max_dimension = 1200;
         if ($base_width > $max_dimension || $base_height > $max_dimension) {
             $scale_factor = $max_dimension / max($base_width, $base_height);
             $new_width = round($base_width * $scale_factor);
@@ -424,18 +427,24 @@ class Thready_Image_Handler {
     
     private static function create_image_resource($image_url) {
         if (!filter_var($image_url, FILTER_VALIDATE_URL)) {
-            error_log("Thready: Invalid image URL - $image_url");
-            return false;
+            // Already a local path — accept it
+            if ( ! file_exists( $image_url ) ) {
+                error_log("Thready: Invalid image URL - $image_url");
+                return false;
+            }
+        } else {
+            // Use local path if possible for better performance AND to avoid
+            // URL-encoded UTF-8 sequences (e.g. %C5%BE for ž) that file_exists
+            // and GD can't resolve.
+            $upload_dir = wp_upload_dir();
+            $local_path = str_replace($upload_dir['baseurl'], $upload_dir['basedir'], $image_url);
+            $local_path = rawurldecode($local_path);
+
+            if (file_exists($local_path)) {
+                $image_url = $local_path;
+            }
         }
-        
-        // Use local path if possible for better performance
-        $upload_dir = wp_upload_dir();
-        $local_path = str_replace($upload_dir['baseurl'], $upload_dir['basedir'], $image_url);
-        
-        if (file_exists($local_path)) {
-            $image_url = $local_path;
-        }
-        
+
         $image_info = @getimagesize($image_url);
         
         if (!$image_info) {

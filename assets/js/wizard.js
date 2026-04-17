@@ -26,10 +26,13 @@
         printFrontId : 0, printFrontUrl : '', printFrontThumb : '',
         printLightId : 0, printLightUrl : '', printLightThumb : '',
         printBackId  : 0, printBackUrl  : '', printBackThumb  : '',
-        tipColors    : {},   // { tipSlug: { bojaSlug: { selected, lightPrint } } }
-        tipSizes     : {},   // { tipSlug: string[] }
-        tipPrices    : {},   // { tipSlug: { regular, sale } }
-        tipPositions : {},   // { tipSlug: { front, back|null } }
+        tipColors    : {},
+        tipSizes     : {},
+        tipPrices    : {},
+        tipPositions : {},
+        featuredTipSlug  : '',
+        featuredBojaSlug : '',
+        featuredSide     : 'front',
         dynamicSteps : [],
         stepIndex    : 0,
     };
@@ -68,9 +71,10 @@
             steps.push( { id: 'type-' + t, type: 'type_config', tipSlug: t, tipName: tip.name, label: tip.name, sublabel: '' } );
         } );
 
-        steps.push( { id: 'pricing',     type: 'pricing',     label: 'Pricing', sublabel: '' } );
-        steps.push( { id: 'positioning', type: 'positioning', label: 'Design',  sublabel: '' } );
-        steps.push( { id: 'review',      type: 'review',      label: 'Review',  sublabel: '' } );
+        steps.push( { id: 'pricing',       type: 'pricing',       label: 'Pricing', sublabel: '' } );
+        steps.push( { id: 'positioning',   type: 'positioning',   label: 'Design',  sublabel: '' } );
+        steps.push( { id: 'product_image', type: 'product_image', label: 'Image',   sublabel: '' } );
+        steps.push( { id: 'review',        type: 'review',        label: 'Review',  sublabel: '' } );
 
         S.dynamicSteps = steps;
     }
@@ -119,8 +123,9 @@
             case 'setup':       renderSetup();                                  break;
             case 'type_config': renderTypeConfig( step.tipSlug, step.tipName ); break;
             case 'pricing':     renderPricing();                                break;
-            case 'positioning': renderPositioning();                            break;
-            case 'review':      renderReview();                                 break;
+            case 'positioning':   renderPositioning();   break;
+            case 'product_image': renderProductImage();  break;
+            case 'review':        renderReview();        break;
         }
 
         $btnBack.toggle( index > 0 );
@@ -195,6 +200,12 @@
 
             case 'positioning':
                 collectPositioning();
+                return true;
+
+            case 'product_image':
+                if ( ! S.featuredTipSlug || ! S.featuredBojaSlug ) {
+                    return err( 'Select a product image.' );
+                }
                 return true;
 
             default:
@@ -820,6 +831,185 @@
         };
     }
 
+    // ── PRODUCT IMAGE ─────────────────────────────────────────────────────────
+
+    function renderProductImage() {
+        var h = '<div class="wizard-step">';
+        h += '<h2 class="step-title">Product Image</h2>';
+        h += '<p class="step-subtitle">Choose which combination to use as the featured image. '
+           + 'This appears in the shop, archives and social sharing.</p>';
+
+        h += '<div class="wiz-pi-grid">';
+
+        S.tipSlugs.forEach( function ( t ) {
+            var tip     = getTip( t );
+            var colors  = Object.keys( S.tipColors[ t ] || {} )
+                .filter( function ( b ) { return ( S.tipColors[ t ] || {} )[ b ].selected; } );
+            var isSelected = S.featuredTipSlug === t;
+            var selBoja    = isSelected ? S.featuredBojaSlug : ( colors[0] || '' );
+            var selSide    = isSelected ? S.featuredSide : 'front';
+
+            h += '<div class="wiz-pi-card ' + ( isSelected ? 'is-selected' : '' ) + '" data-tip="' + esc( t ) + '">';
+            h += '<div class="wiz-pi-card-name">' + esc( tip.name ) + '</div>';
+
+            // Full-size canvas preview
+            h += '<div class="wiz-pi-canvas-wrap">';
+            h += '<canvas id="pi-cv-' + esc( t ) + '" class="wiz-pi-canvas"></canvas>';
+            h += '<div class="wiz-pi-no-base" id="pi-nb-' + esc( t ) + '" style="display:none;">No base image — add in Mockup Library</div>';
+            h += '</div>';
+
+            // Controls row
+            h += '<div class="wiz-pi-controls">';
+
+            // Color selector
+            h += '<select class="wiz-pi-color" data-tip="' + esc( t ) + '">';
+            colors.forEach( function ( b ) {
+                var boja = getBoja( b );
+                h += '<option value="' + esc( b ) + '" ' + ( selBoja === b ? 'selected' : '' ) + '>'
+                   + esc( boja.name ) + '</option>';
+            } );
+            h += '</select>';
+
+            // Front/Back toggle (only if back print uploaded)
+            if ( S.printBackId ) {
+                h += '<div class="wiz-pi-sides">';
+                h += '<button type="button" class="wiz-pi-side ' + ( selSide === 'front' ? 'active' : '' )
+                   + '" data-tip="' + esc( t ) + '" data-side="front">Front</button>';
+                h += '<button type="button" class="wiz-pi-side ' + ( selSide === 'back' ? 'active' : '' )
+                   + '" data-tip="' + esc( t ) + '" data-side="back">Back</button>';
+                h += '</div>';
+            }
+
+            h += '</div>'; // .wiz-pi-controls
+
+            h += '<button type="button" class="button ' + ( isSelected ? 'button-primary' : '' )
+               + ' wiz-pi-pick" data-tip="' + esc( t ) + '">';
+            h += isSelected ? '✓ Selected' : 'Use This';
+            h += '</button>';
+
+            h += '</div>'; // .wiz-pi-card
+        } );
+
+        h += '</div></div>'; // .wiz-pi-grid + .wizard-step
+        $body.html( h );
+
+        // Auto-select first tip if nothing chosen yet
+        if ( ! S.featuredTipSlug && S.tipSlugs.length ) {
+            var ft = S.tipSlugs[0];
+            var fc = Object.keys( S.tipColors[ ft ] || {} )
+                .filter( function ( b ) { return ( S.tipColors[ ft ] || {} )[ b ].selected; } )[0] || '';
+            selectFeatured( ft, fc, 'front', false );
+        }
+
+        // Draw all canvases
+        S.tipSlugs.forEach( function ( t ) {
+            drawPiCanvas( t );
+        } );
+
+        bindPiEvents();
+    }
+
+    function selectFeatured( tipSlug, bojaSlug, side, redraw ) {
+        S.featuredTipSlug  = tipSlug;
+        S.featuredBojaSlug = bojaSlug;
+        S.featuredSide     = side || 'front';
+
+        $( '.wiz-pi-card' ).removeClass( 'is-selected' );
+        $( '.wiz-pi-pick' ).removeClass( 'button-primary' ).text( 'Use This' );
+
+        var $card = $( '.wiz-pi-card[data-tip="' + tipSlug + '"]' );
+        $card.addClass( 'is-selected' );
+        $card.find( '.wiz-pi-pick' ).addClass( 'button-primary' ).text( '✓ Selected' );
+
+        if ( redraw !== false ) drawPiCanvas( tipSlug );
+    }
+
+    function drawPiCanvas( tipSlug ) {
+        var cv = document.getElementById( 'pi-cv-' + tipSlug );
+        var nb = document.getElementById( 'pi-nb-' + tipSlug );
+        if ( ! cv ) return;
+
+        var isSelected = S.featuredTipSlug === tipSlug;
+        var bojaSlug   = isSelected ? S.featuredBojaSlug
+            : ( $( '.wiz-pi-color[data-tip="' + tipSlug + '"]' ).val()
+                || Object.keys( S.tipColors[ tipSlug ] || {} )
+                   .filter( function ( b ) { return ( S.tipColors[ tipSlug ] || {} )[ b ].selected; } )[0]
+                || '' );
+        var side       = isSelected ? S.featuredSide : 'front';
+
+        var mk       = ( d.mockup_map || {} )[ tipSlug + '|' + bojaSlug ] || {};
+        var baseUrl  = side === 'back' ? ( mk.back_url || '' ) : ( mk.front_url || '' );
+        var printUrl = side === 'back' ? S.printBackUrl : S.printFrontUrl;
+        var pos      = ( S.tipPositions[ tipSlug ] || {} )[ side ] || { x:50, y:25, width:50 };
+
+        if ( ! baseUrl ) {
+            $( cv ).hide(); if ( nb ) $( nb ).show(); return;
+        }
+        $( cv ).show(); if ( nb ) $( nb ).hide();
+
+        var base = new Image();
+        base.crossOrigin = 'anonymous';
+
+        base.onload = function () {
+            // Fit canvas to container width (max 380px), keep aspect ratio
+            var maxW  = Math.min( 380, base.naturalWidth );
+            var scale = maxW / base.naturalWidth;
+            cv.width  = Math.round( base.naturalWidth  * scale );
+            cv.height = Math.round( base.naturalHeight * scale );
+
+            var ctx = cv.getContext( '2d' );
+            ctx.clearRect( 0, 0, cv.width, cv.height );
+            ctx.drawImage( base, 0, 0, cv.width, cv.height );
+
+            if ( ! printUrl ) return;
+
+            var print = new Image();
+            print.crossOrigin = 'anonymous';
+            print.onload = function () {
+                var tw = Math.round( ( pos.width / 100 ) * cv.width );
+                var th = Math.round( tw * print.naturalHeight / print.naturalWidth );
+                var px = pos.x > 0
+                    ? Math.round( ( pos.x / 100 ) * cv.width ) - Math.round( tw / 2 )
+                    : Math.round( ( pos.x / 100 ) * cv.width ) + Math.round( tw / 2 );
+                var py = Math.round( ( pos.y / 100 ) * cv.height );
+                ctx.drawImage( print, px, py, tw, th );
+            };
+            print.onerror = function () {};
+            print.src = printUrl + '?t=' + Date.now();
+        };
+
+        base.onerror = function () { $( cv ).hide(); if ( nb ) $( nb ).show(); };
+        base.src = baseUrl + '?t=' + Date.now();
+    }
+
+    function bindPiEvents() {
+        // Select button
+        $body.on( 'click.wiz', '.wiz-pi-pick', function () {
+            var t    = $( this ).data( 'tip' );
+            var boja = $( '.wiz-pi-color[data-tip="' + t + '"]' ).val() || '';
+            var side = $( '.wiz-pi-side.active[data-tip="' + t + '"]' ).data( 'side' ) || 'front';
+            selectFeatured( t, boja, side, true );
+        } );
+
+        // Color change → redraw
+        $body.on( 'change.wiz', '.wiz-pi-color', function () {
+            var t    = $( this ).data( 'tip' );
+            var boja = $( this ).val();
+            if ( S.featuredTipSlug === t ) S.featuredBojaSlug = boja;
+            drawPiCanvas( t );
+        } );
+
+        // Side toggle → redraw
+        $body.on( 'click.wiz', '.wiz-pi-side', function () {
+            var t    = $( this ).data( 'tip' );
+            var side = $( this ).data( 'side' );
+            $( '.wiz-pi-side[data-tip="' + t + '"]' ).removeClass( 'active' );
+            $( this ).addClass( 'active' );
+            if ( S.featuredTipSlug === t ) S.featuredSide = side;
+            drawPiCanvas( t );
+        } );
+    }
+
     // ── REVIEW ────────────────────────────────────────────────────────────────
 
     function renderReview() {
@@ -840,6 +1030,9 @@
         h += rRow( 'Front Print',    S.printFrontId ? '✓ set' : '<span class="wiz-missing">⚠ missing</span>' );
         h += rRow( 'Light Print',    S.printLightId ? '✓ set' : 'none' );
         h += rRow( 'Back Print',     S.printBackId  ? '✓ set' : 'none' );
+        var featTip  = S.featuredTipSlug  ? getTip( S.featuredTipSlug ).name  : '—';
+        var featBoja = S.featuredBojaSlug ? getBoja( S.featuredBojaSlug ).name : '—';
+        h += rRow( 'Featured Image', featTip + ' — ' + featBoja + ' — ' + S.featuredSide );
         h += '</div>';
 
         S.tipSlugs.forEach( function ( t ) {
@@ -886,7 +1079,7 @@
         var base = new Image();
         base.crossOrigin = 'anonymous';
         base.onload = function () {
-            var maxW  = Math.min( 280, base.naturalWidth );
+            var maxW  = Math.min( 800, base.naturalWidth );
             var scale = maxW / base.naturalWidth;
             cv.width  = Math.round( base.naturalWidth  * scale );
             cv.height = Math.round( base.naturalHeight * scale );
@@ -927,15 +1120,18 @@
         } );
 
         var payload = {
-            name          : S.name,
-            tip_slugs     : S.tipSlugs,
-            tip_colors    : tipColorsPayload,
-            tip_sizes     : S.tipSizes,
-            tip_prices    : S.tipPrices,
-            tip_positions : S.tipPositions,
-            print_front_id: S.printFrontId,
-            print_light_id: S.printLightId || 0,
-            print_back_id : S.printBackId  || 0,
+            name               : S.name,
+            tip_slugs          : S.tipSlugs,
+            tip_colors         : tipColorsPayload,
+            tip_sizes          : S.tipSizes,
+            tip_prices         : S.tipPrices,
+            tip_positions      : S.tipPositions,
+            print_front_id     : S.printFrontId,
+            print_light_id     : S.printLightId || 0,
+            print_back_id      : S.printBackId  || 0,
+            featured_tip_slug  : S.featuredTipSlug,
+            featured_boja_slug : S.featuredBojaSlug,
+            featured_side      : S.featuredSide,
         };
 
         $.post( d.ajax_url, {

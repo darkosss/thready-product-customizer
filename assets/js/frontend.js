@@ -488,8 +488,23 @@ jQuery(document).ready(function($) {
         if (variation.thready_available_sizes && variation.thready_available_sizes.trim() !== '' && 
             variation.attributes['attribute_pa_tip-proizvoda'] === currentProductType) {
             
-            var sizes = variation.thready_available_sizes.split(',');
-            
+            var sizes = variation.thready_available_sizes.split(',')
+                .map(function (s) { return s.trim(); })
+                .filter(function (s) { return s !== ''; });
+
+            // Sort sizes by canonical attribute order (S, M, L, XL, XXL, …)
+            // so they don't change position when switching colors.
+            var canonicalOrder = (thready_frontend_params.size_order || []);
+            if (canonicalOrder.length) {
+                var rank = {};
+                canonicalOrder.forEach(function (slug, i) { rank[slug] = i; });
+                sizes.sort(function (a, b) {
+                    var ra = (a in rank) ? rank[a] : 9999;
+                    var rb = (b in rank) ? rank[b] : 9999;
+                    return ra - rb;
+                });
+            }
+
             $sizeWrapper.empty();
             $sizeNotice.remove();
             

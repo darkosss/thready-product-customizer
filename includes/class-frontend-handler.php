@@ -39,7 +39,7 @@ class Thready_Frontend_Handler {
 
             wp_enqueue_script(
                 'thready-frontend',
-                THREADY_PC_URL . 'assets/js/frontend-min.js',
+                THREADY_PC_URL . 'assets/js/frontend.js',
                 ['jquery', 'wc-add-to-cart-variation'],
                 THREADY_PC_VERSION,
                 true
@@ -48,7 +48,7 @@ class Thready_Frontend_Handler {
             // Couple Mode frontend script
             wp_enqueue_script(
                 'thready-couple-mode',
-                THREADY_PC_URL . 'assets/js/couple-mode-min.js',
+                THREADY_PC_URL . 'assets/js/couple-mode.js',
                 ['jquery', 'wc-add-to-cart-variation'],
                 THREADY_PC_VERSION,
                 true
@@ -77,15 +77,21 @@ class Thready_Frontend_Handler {
             return;
         }
 
-        // Size labels (existing logic)
-        $size_terms = get_terms([
-            'taxonomy'   => 'pa_velicina',
-            'hide_empty' => false
-        ]);
+        // Size terms IN CUSTOM ORDER (respects drag-and-drop ordering in
+        // WC > Attributes > Configure terms). We need both the names map
+        // AND the ordered slug list so the frontend can render sizes in
+        // the correct order regardless of how they're stored per variation.
+        if ( class_exists( 'Thready_Variation_Factory' ) ) {
+            $size_terms = Thready_Variation_Factory::get_ordered_terms( 'pa_velicina' );
+        } else {
+            $size_terms = get_terms( [ 'taxonomy' => 'pa_velicina', 'hide_empty' => false ] );
+        }
 
         $size_names = [];
+        $size_order = [];
         foreach ( $size_terms as $term ) {
             $size_names[ $term->slug ] = $term->name;
+            $size_order[]              = $term->slug;
         }
 
         wp_localize_script('thready-frontend', 'thready_frontend_params', [
@@ -95,7 +101,8 @@ class Thready_Frontend_Handler {
             'select_variation_first' => __('Please select a variation first', 'thready-product-customizer'),
             'no_sizes_available'     => __('No sizes available for this variation', 'thready-product-customizer'),
             'select_size_required'   => __('Please select a size', 'thready-product-customizer'),
-            'size_names'             => $size_names
+            'size_names'             => $size_names,
+            'size_order'             => $size_order,
         ]);
 
         // Color hex map for Couple Mode (pa_boja)

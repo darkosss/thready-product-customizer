@@ -92,12 +92,34 @@ class Thready_Live_Preview {
             }
         }
 
+        // Thumbnail map: "tip|boja" → { front: url, back: url }
+        // Pre-generated 150×150 images used for gallery thumbnail strip navigation
+        $thumbnail_map = [];
+        foreach ( $active_tips as $tip_slug ) {
+            foreach ( $active_bojas as $boja_slug ) {
+                // Find the variation for this tip+boja
+                $var_id = self::get_variation_id( $product_id, $tip_slug, $boja_slug );
+                if ( ! $var_id ) continue;
+
+                $key = $tip_slug . '|' . $boja_slug;
+
+                $front_thumb_id = (int) get_post_meta( $var_id, '_thumbnail_id', true );
+                $back_thumb_id  = (int) get_post_meta( $var_id, '_thready_back_thumb_id', true );
+
+                $thumbnail_map[ $key ] = [
+                    'front' => $front_thumb_id ? wp_get_attachment_image_url( $front_thumb_id, 'thumbnail' ) : '',
+                    'back'  => $back_thumb_id  ? wp_get_attachment_image_url( $back_thumb_id,  'thumbnail' ) : '',
+                ];
+            }
+        }
+
         return [
             'print_front'   => $front_url,
             'print_light'   => $light_url,
             'print_back'    => $back_url,
-            'tip_positions' => $tip_positions,   // { tipSlug: { front, back } }
-            'mockups'       => $mockup_map,       // { "tip|boja": { front, back } }
+            'tip_positions' => $tip_positions,
+            'mockups'       => $mockup_map,
+            'thumbnails'    => $thumbnail_map,   // { "tip|boja": { front: thumbUrl, back: thumbUrl } }
             'has_back'      => ! empty( $back_url ),
             'has_light'     => ! empty( $light_url ),
             'design_ver'    => (int) get_post_meta( $product_id, Thready_Variation_Factory::META_DESIGN_VERSION, true ),
@@ -132,12 +154,16 @@ class Thready_Live_Preview {
             'src_w' => 0, 'src_h' => 0, 'full_src_w' => 0, 'full_src_h' => 0,
         ];
 
-        // Pass both tip and boja slugs so JS can look up "tip|boja" in mockup map
-        $data['thready_tip_slug']  = $variation->get_attribute( THREADY_TAX_TIP  );
-        $data['thready_boja_slug'] = $variation->get_attribute( THREADY_TAX_BOJA );
+        // Pass both tip and boja SLUGS so JS can look up "tip|boja" in mockup map.
+        // IMPORTANT: $variation->get_attribute() returns the term NAME for
+        // taxonomy attributes (e.g. "Ljubičasta") — we need the SLUG
+        // ("ljubicasta"). Read from postmeta directly to guarantee the slug.
+        $variation_id = $variation->get_id();
+        $data['thready_tip_slug']  = (string) get_post_meta( $variation_id, 'attribute_' . THREADY_TAX_TIP,  true );
+        $data['thready_boja_slug'] = (string) get_post_meta( $variation_id, 'attribute_' . THREADY_TAX_BOJA, true );
 
         // Pass light print flag
-        $data['thready_light_print'] = get_post_meta( $variation->get_id(), '_thready_use_light_print', true ) === 'yes';
+        $data['thready_light_print'] = get_post_meta( $variation_id, '_thready_use_light_print', true ) === 'yes';
 
         return $data;
     }
@@ -174,8 +200,10 @@ class Thready_Live_Preview {
         if ( ! self::is_canvas_product( $parent_id ) ) return $cart_item_data;
         if ( ! function_exists( 'imagecreatetruecolor' ) ) return $cart_item_data;
 
-        $boja_slug = $variation->get_attribute( THREADY_TAX_BOJA );
-        $tip_slug  = $variation->get_attribute( THREADY_TAX_TIP  );
+        // Read SLUGS directly from postmeta — get_attribute() returns term
+        // name for taxonomy attributes.
+        $tip_slug  = (string) get_post_meta( $variation_id, 'attribute_' . THREADY_TAX_TIP,  true );
+        $boja_slug = (string) get_post_meta( $variation_id, 'attribute_' . THREADY_TAX_BOJA, true );
         if ( ! $boja_slug || ! $tip_slug ) return $cart_item_data;
 
         // Skip if already cached for this design version
@@ -211,7 +239,7 @@ class Thready_Live_Preview {
         ];
 
         $attachment_id = Thready_Image_Handler::generate_merged_image(
-            $product_id, $variation_id, $settings, $print_id, 'front'
+            $product_id, $variation_id, $settings, $print_id, 'front', 150
         );
 
         if ( $attachment_id && ! is_wp_error( $attachment_id ) ) {
@@ -246,7 +274,16 @@ class Thready_Live_Preview {
     }
 
     // -------------------------------------------------------------------------
-    // Cart / order thumbnail
+    // Cart / order / admin thumbnail
+    //
+    // For variations on canvas products, always show the correct merged
+    // image — NEVER fall back to the parent's featured image.
+    //
+    // Order of preference:
+    //   1. Variation's own _thumbnail_id (set at creation by
+    //      generate_variation_thumbnails).
+    //   2. Add-to-cart cache image (from maybe_generate_cache_image).
+    //   3. Generated on-demand right now + persisted as variation image.
     // -------------------------------------------------------------------------
 
     public static function maybe_use_cached_image( $image, $product, $size, $attr, $placeholder ) {
@@ -255,10 +292,51 @@ class Thready_Live_Preview {
         $parent_id = $product->get_parent_id();
         if ( ! self::is_canvas_product( $parent_id ) ) return $image;
 
-        $cached_id = self::get_valid_cached_image( $product->get_id(), $parent_id );
-        if ( ! $cached_id ) return $image;
+        $variation_id = $product->get_id();
 
-        return wp_get_attachment_image( $cached_id, $size, false, $attr );
+        // 1. Variation already has its own image (normal path for new products)
+        $var_thumb_id = (int) get_post_meta( $variation_id, '_thumbnail_id', true );
+        if ( $var_thumb_id && wp_attachment_is_image( $var_thumb_id ) ) {
+            return wp_get_attachment_image( $var_thumb_id, $size, false, $attr );
+        }
+
+        // 2. Cached add-to-cart image
+        $cached_id = self::get_valid_cached_image( $variation_id, $parent_id );
+        if ( $cached_id ) {
+            // Also persist as variation thumbnail so subsequent calls skip step 3
+            self::persist_variation_thumb( $variation_id, $cached_id );
+            return wp_get_attachment_image( $cached_id, $size, false, $attr );
+        }
+
+        // 3. Generate on demand (existing products, failed generation, etc.)
+        if ( function_exists( 'imagecreatetruecolor' ) ) {
+            // Read slugs from postmeta — get_attribute() returns term names
+            // for taxonomy attributes.
+            $tip_slug  = (string) get_post_meta( $variation_id, 'attribute_' . THREADY_TAX_TIP,  true );
+            $boja_slug = (string) get_post_meta( $variation_id, 'attribute_' . THREADY_TAX_BOJA, true );
+
+            if ( $tip_slug && $boja_slug ) {
+                $new_id = self::generate_and_cache( $parent_id, $variation_id, $tip_slug, $boja_slug );
+                if ( $new_id ) {
+                    self::persist_variation_thumb( $variation_id, $new_id );
+                    return wp_get_attachment_image( $new_id, $size, false, $attr );
+                }
+            }
+        }
+
+        // Absolute last resort — return whatever WC gave us
+        return $image;
+    }
+
+    /**
+     * Save an attachment ID as the variation's thumbnail via WC's data-store
+     * so WC's internal product cache is invalidated correctly.
+     */
+    private static function persist_variation_thumb( $variation_id, $attachment_id ) {
+        $var = wc_get_product( $variation_id );
+        if ( ! $var ) return;
+        $var->set_image_id( (int) $attachment_id );
+        $var->save();
     }
 
     // -------------------------------------------------------------------------
@@ -267,6 +345,21 @@ class Thready_Live_Preview {
 
     public static function is_canvas_product( $product_id ) {
         return get_post_meta( $product_id, Thready_Variation_Factory::META_RENDER_MODE, true ) === 'canvas';
+    }
+
+    private static function get_variation_id( $product_id, $tip_slug, $boja_slug ) {
+        global $wpdb;
+        $tip_key  = 'attribute_' . THREADY_TAX_TIP;
+        $boja_key = 'attribute_' . THREADY_TAX_BOJA;
+
+        return (int) $wpdb->get_var( $wpdb->prepare( "
+            SELECT p.ID
+            FROM   {$wpdb->posts} p
+            JOIN   {$wpdb->postmeta} pm1 ON pm1.post_id = p.ID AND pm1.meta_key = %s AND pm1.meta_value = %s
+            JOIN   {$wpdb->postmeta} pm2 ON pm2.post_id = p.ID AND pm2.meta_key = %s AND pm2.meta_value = %s
+            WHERE  p.post_parent = %d AND p.post_type = 'product_variation' AND p.post_status != 'trash'
+            LIMIT  1
+        ", $tip_key, $tip_slug, $boja_key, $boja_slug, $product_id ) );
     }
 
     private static function get_active_tip_slugs( $product_id ) {

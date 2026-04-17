@@ -555,13 +555,14 @@
     display: flex;
     gap: 16px;
     align-items: flex-start;
-    flex-wrap: wrap;
+    flex-direction: column;
 }
 
 /* Canvas */
 .wiz-canvas-wrap {
     flex-shrink: 0;
-    width: 180px;
+    width: 800px;
+    max-width: 100%;
     min-height: 100px;
     border: 1px solid var(--wiz-border);
     border-radius: 4px;
@@ -574,7 +575,7 @@
 
 .wiz-canvas {
     display: block;
-    max-width: 180px;
+    max-width: 100%;
     height: auto;
 }
 
@@ -856,3 +857,115 @@
 
 /* Remove old two-button row styles no longer needed */
 .wiz-print-btn-row { display: none; }
+
+/* ── Product Image Step ─────────────────────────────────────────────── */
+.wiz-pi-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+}
+
+.wiz-pi-card {
+    flex: 1;
+    min-width: 260px;
+    max-width: 420px;
+    border: 2px solid var(--wiz-border);
+    border-radius: var(--wiz-radius);
+    background: var(--wiz-surface);
+    overflow: hidden;
+    transition: border-color .15s;
+}
+
+.wiz-pi-card.is-selected {
+    border-color: var(--wiz-accent);
+}
+
+.wiz-pi-card-name {
+    padding: 10px 14px 8px;
+    font-size: 13px;
+    font-weight: 700;
+    border-bottom: 1px solid var(--wiz-border);
+    background: var(--wiz-bg);
+    color: var(--wiz-text);
+}
+
+/* Canvas area */
+.wiz-pi-canvas-wrap {
+    background: var(--wiz-bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 200px;
+    position: relative;
+}
+
+.wiz-pi-canvas {
+    display: block;
+    max-width: 100%;
+    height: auto;
+}
+
+.wiz-pi-no-base {
+    font-size: 12px;
+    color: var(--wiz-muted);
+    text-align: center;
+    padding: 20px;
+}
+
+/* Controls */
+.wiz-pi-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--wiz-border);
+    border-bottom: 1px solid var(--wiz-border);
+    background: var(--wiz-bg);
+}
+
+.wiz-pi-color {
+    flex: 1;
+    font-size: 12px !important;
+    height: 28px !important;
+    padding: 2px 6px !important;
+}
+
+/* Side toggle */
+.wiz-pi-sides {
+    display: flex;
+    border: 1px solid var(--wiz-border-dark);
+    border-radius: 4px;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.wiz-pi-side {
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--wiz-surface);
+    border: none;
+    cursor: pointer;
+    color: var(--wiz-muted);
+    transition: background .1s, color .1s;
+}
+
+.wiz-pi-side + .wiz-pi-side {
+    border-left: 1px solid var(--wiz-border-dark);
+}
+
+.wiz-pi-side.active {
+    background: #1a1a18;
+    color: #fff;
+}
+
+/* Pick button */
+.wiz-pi-pick {
+    display: block;
+    width: calc(100% - 24px);
+    margin: 10px 12px 12px;
+    text-align: center;
+    font-size: 12px !important;
+    height: auto !important;
+    padding: 5px 0 !important;
+}

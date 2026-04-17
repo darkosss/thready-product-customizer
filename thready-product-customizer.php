@@ -3,7 +3,7 @@
 Plugin Name: Thready Product Customizer
 Plugin URI: https://thready.rs
 Description: Custom product builder with print designs for WooCommerce
-Version: 1.0
+Version: 1.3
 Author: Darko
 Author URI: mailto:darko1981@gmail.com
 Text Domain: thready-product-customizer
@@ -15,7 +15,7 @@ Requires Plugins: woocommerce
 defined('ABSPATH') || exit;
 
 // Define constants
-define('THREADY_PC_VERSION', '1.0');
+define('THREADY_PC_VERSION', '1.3');
 define('THREADY_PC_PATH', plugin_dir_path(__FILE__));
 define('THREADY_PC_URL', plugin_dir_url(__FILE__));
 define('THREADY_IMAGE_SIZES', [
@@ -56,7 +56,28 @@ require_once THREADY_PC_PATH . 'includes/class-admin-custom-order-request.php';
 require_once THREADY_PC_PATH . 'includes/class-couple-mode-cart.php';
 
 
-// Initialize the plugin
+// ── Transparent placeholder — replaces WooCommerce's default grey "no image" ──
+add_filter( 'woocommerce_placeholder_img_src', function () {
+    return THREADY_PC_URL . 'assets/images/transparent.png';
+} );
+
+add_filter( 'woocommerce_placeholder_img', function () {
+    return '<img src="' . esc_url( THREADY_PC_URL . 'assets/images/transparent.png' ) . '" alt="" width="1" height="1">';
+} );
+
+// Create transparent PNG on init if it doesn't exist yet (handles already-active installs)
+add_action( 'init', function () {
+    $f = THREADY_PC_PATH . 'assets/images/transparent.png';
+    if ( ! file_exists( $f ) && function_exists( 'imagecreatetruecolor' ) ) {
+        wp_mkdir_p( dirname( $f ) );
+        $img = imagecreatetruecolor( 1, 1 );
+        imagesavealpha( $img, true );
+        imagefill( $img, 0, 0, imagecolorallocatealpha( $img, 255, 255, 255, 127 ) );
+        imagepng( $img, $f );
+        imagedestroy( $img );
+    }
+} );
+
 add_action('plugins_loaded', function () {
 
     // WooCommerce check
@@ -71,6 +92,7 @@ add_action('plugins_loaded', function () {
 
     // New system
     Thready_Mockup_Library::init();
+    Thready_Variation_Factory::init();
     Thready_Product_Wizard::init();
     Thready_Live_Preview::init();
 
@@ -103,6 +125,21 @@ register_activation_hook(__FILE__, function () {
     $index_php = $custom_dir . '/index.php';
     if (!file_exists($index_php)) {
         file_put_contents($index_php, "<?php\n// Silence is golden\n");
+    }
+
+    // Create transparent placeholder PNG
+    $placeholder_dir  = THREADY_PC_PATH . 'assets/images';
+    $placeholder_file = $placeholder_dir . '/transparent.png';
+    if ( ! file_exists( $placeholder_file ) ) {
+        wp_mkdir_p( $placeholder_dir );
+        if ( function_exists( 'imagecreatetruecolor' ) ) {
+            $img         = imagecreatetruecolor( 1, 1 );
+            imagesavealpha( $img, true );
+            $transparent = imagecolorallocatealpha( $img, 255, 255, 255, 127 );
+            imagefill( $img, 0, 0, $transparent );
+            imagepng( $img, $placeholder_file );
+            imagedestroy( $img );
+        }
     }
 
     // Create mockup library table
