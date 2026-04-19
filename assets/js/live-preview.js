@@ -5,6 +5,10 @@
  * Works with multi-tip products: variations = pa_tip-proizvoda × pa_boja.
  * Outputs WebP at 95% quality with PNG fallback.
  * Updates existing Swiper slides in-place to avoid Greenshift conflicts.
+ *
+ * Gallery is hidden via CSS (.thready-gallery-ready) until the first
+ * canvas composite is rendered, preventing the flash of the default
+ * featured image on page load.
  */
 /* global threadyCanvas, jQuery */
 (function ($) {
@@ -14,7 +18,7 @@
     if (!d) return;
 
     // ── Configuration ─────────────────────────────────────────────────────────
-    var MIN_LOADING_TIME = 300;
+    var MIN_LOADING_TIME = 150;
     var WEBP_QUALITY = 0.95;
 
     var supportsWebP = false;
@@ -27,6 +31,7 @@
     var cache = {};
     var currentTip = null;
     var currentBoja = null;
+    var isFirstLoad = true;
     var isCurrentVariationOnSale = false;
     var saleBadgeTimer = null;
     var capturedLightboxOptions = null;
@@ -37,6 +42,16 @@
     // ── Gallery helpers ───────────────────────────────────────────────────────
     function getGalleryWrap() {
         return $('.gspb-product-image-gallery-wrap').first();
+    }
+
+    /**
+     * Mark the gallery as ready — fades it in via CSS transition.
+     * Called once after the first composite renders. Subsequent
+     * variation changes use the loading overlay instead.
+     */
+    function revealGallery() {
+        getGalleryWrap().addClass('thready-gallery-ready');
+        isFirstLoad = false;
     }
 
     // ── Debounced update for sale badge visibility ───────────────────────────
@@ -59,9 +74,6 @@
     // ── Notify zoom script after image update ─────────────────────────────────
     function refreshZoomForCurrentImage() {
         if (typeof window.threadyZoomRefresh === 'function') {
-            // Refresh zoom on ALL visible gallery slides (front + back),
-            // not just the first one. The back slide's image changes too
-            // and needs its zoom level recalculated.
             $('.gspb-gallery-full .swiper-slide').each(function() {
                 var slide = this;
                 if ($(slide).find('img').length && $(slide).is(':visible')) {
@@ -78,9 +90,6 @@
         if ($('.slbElement:not(.slbLoading)').length) {
             $html.addClass('slbActive');
         }
-        //if ($('.slbElement').length) {
-            //$('.slbElement').remove();
-        //}
     }
 
     // ── Image loading ─────────────────────────────────────────────────────────
@@ -200,12 +209,7 @@
         var $thumbSlides = $('.gspb-gallery-thumb .swiper-slide');
         var $thumbContainer = $('.gspb-gallery-thumb');
 
-        // Hide thumbnail container if only one composite, show otherwise
-        if (composites.length <= 1) {
-            $thumbContainer.hide();
-        } else {
-            $thumbContainer.show();
-        }
+        $thumbContainer.show();
 
         // Update main slides
         composites.forEach(function(item, index) {
@@ -216,9 +220,6 @@
             var displayUrl = item.url + suffix;
 
             // Ensure the slide has an <a class="imagelink"> wrapper.
-            // Greenshift only wraps the featured image (first slide) in an
-            // anchor — gallery images (second slide onward) get a bare <img>.
-            // SimpleLightbox needs the anchor to bind to.
             var $anchor = $slide.find('a.imagelink, a.woocommerce-product-gallery__trigger, a[data-lightbox]');
             if (!$anchor.length) {
                 var $img = $slide.find('img');
@@ -248,17 +249,10 @@
                 .attr('data-main-featured-image-src', displayUrl);
         });
 
-        // Hide any extra slides if composites count decreased
-        if ($mainSlides.length > composites.length) {
-            for (var i = composites.length; i < $mainSlides.length; i++) {
-                $mainSlides.eq(i).hide();
-                $thumbSlides.eq(i).hide();
-            }
-        } else {
-            // Ensure previously hidden slides are shown
-            $mainSlides.show();
-            $thumbSlides.show();
-        }
+        // Keep all slides visible — canvas slots get updated above,
+        // static gallery images and 360 gallery are never touched.
+        $mainSlides.show();
+        $thumbSlides.show();
 
         // Refresh lightbox on updated anchors
         var $anchors = $('.gspb-gallery-full').find('a.imagelink, a.woocommerce-product-gallery__trigger, a[data-lightbox]');
@@ -271,7 +265,6 @@
                 $(this).removeData('simpleLightbox');
             });
 
-            // Remove stale lightbox modal DOM nodes
             $('.slbElement').remove();
             $('html').removeClass('slbActive');
 
@@ -283,50 +276,64 @@
         cleanupHtmlSlbActive();
     }
 
-// ── WooCommerce variation events ──────────────────────────────────────────
-$(document).on('found_variation', function (e, variation) {
-    var tipSlug = variation.thready_tip_slug || '';
-    var bojaSlug = variation.thready_boja_slug || '';
-    var lightPrint = !!variation.thready_light_print;
-    var productTitle = $('.product_title').text() || '';
+    // ── WooCommerce variation events ──────────────────────────────────────────
+    $(document).on('found_variation', function (e, variation) {
+        var tipSlug = variation.thready_tip_slug || '';
+        var bojaSlug = variation.thready_boja_slug || '';
+        var lightPrint = !!variation.thready_light_print;
+        var productTitle = $('.product_title').text() || '';
 
-    tipSlug = tipSlug.toLowerCase().replace(/\s+/g, '-');
-    bojaSlug = bojaSlug.toLowerCase().replace(/\s+/g, '-');
+        tipSlug = tipSlug.toLowerCase().replace(/\s+/g, '-');
+        bojaSlug = bojaSlug.toLowerCase().replace(/\s+/g, '-');
 
-    currentTip = tipSlug;
-    currentBoja = bojaSlug;
+        currentTip = tipSlug;
+        currentBoja = bojaSlug;
 
-    var isOnSale = variation.display_price !== undefined &&
-                   variation.display_regular_price !== undefined &&
-                   parseFloat(variation.display_price) < parseFloat(variation.display_regular_price);
-    isCurrentVariationOnSale = isOnSale;
-    debouncedUpdateSaleBadgeVisibility(isOnSale);
+        var isOnSale = variation.display_price !== undefined &&
+                       variation.display_regular_price !== undefined &&
+                       parseFloat(variation.display_price) < parseFloat(variation.display_regular_price);
+        isCurrentVariationOnSale = isOnSale;
+        debouncedUpdateSaleBadgeVisibility(isOnSale);
 
-    var $wrap = getGalleryWrap();
-    $wrap.addClass('thready-canvas-loading');
+        var $wrap = getGalleryWrap();
 
-    generateAndPreloadComposites(tipSlug, bojaSlug, lightPrint)
-        .then(function(composites) {
-            if (composites.length) {
-                updateGalleryInPlace(composites, productTitle);
-            }
-            $wrap.removeClass('thready-canvas-loading');
-            // Reapply sale badge visibility after gallery update
-            debouncedUpdateSaleBadgeVisibility(isOnSale);
-        })
-        .catch(function(err) {
-            console.error('[Thready] Composite/preload failed:', err);
-            $wrap.removeClass('thready-canvas-loading');
-            debouncedUpdateSaleBadgeVisibility(isOnSale);
-        });
-});
+        // On first load the gallery is hidden via CSS (opacity:0).
+        // On subsequent swaps, show the loading overlay instead.
+        if (!isFirstLoad) {
+            $wrap.addClass('thready-canvas-loading');
+        }
+
+        generateAndPreloadComposites(tipSlug, bojaSlug, lightPrint)
+            .then(function(composites) {
+                if (composites.length) {
+                    updateGalleryInPlace(composites, productTitle);
+                }
+
+                // First load: fade in the gallery. Subsequent: remove overlay.
+                if (isFirstLoad) {
+                    revealGallery();
+                } else {
+                    $wrap.removeClass('thready-canvas-loading');
+                }
+
+                debouncedUpdateSaleBadgeVisibility(isOnSale);
+            })
+            .catch(function(err) {
+                console.error('[Thready] Composite/preload failed:', err);
+                if (isFirstLoad) {
+                    revealGallery();
+                } else {
+                    $wrap.removeClass('thready-canvas-loading');
+                }
+                debouncedUpdateSaleBadgeVisibility(isOnSale);
+            });
+    });
 
     $(document).on('reset_data hide_variation', function () {
         currentTip = null;
         currentBoja = null;
         isCurrentVariationOnSale = false;
         debouncedUpdateSaleBadgeVisibility(false);
-        // Greenshift will reset the gallery itself; we just need to clean up our loading class
         getGalleryWrap().removeClass('thready-canvas-loading');
     });
 
@@ -348,11 +355,9 @@ $(document).on('found_variation', function (e, variation) {
             if (this.$el && this.$el.parentNode) {
                 originalDestroy.call(this);
             } else {
-                // Modal already removed; just clean up events and call afterDestroy
                 if (this.options && typeof this.options.afterDestroy === 'function') {
                     this.options.afterDestroy(this);
                 }
-                // Remove any event listeners if needed (simplified)
                 if (this.eventRegistry) {
                     this.removeEvents('lightbox');
                     this.removeEvents('thumbnails');
@@ -360,13 +365,11 @@ $(document).on('found_variation', function (e, variation) {
             }
         };
         window.SimpleLightbox._patched = true;
-        console.log('[Thready] Patched SimpleLightbox.destroy for safety');
     }
 
-    // ── Tag the real image modal with slbThready and hide duplicates ─────────────
+    // ── Tag the real image modal with slbThready and hide duplicates ─────────
     function tagRealImageModal() {
         setTimeout(function() {
-            // 1. Tag modals that actually contain an image
             $('.slbElement').each(function() {
                 var $modal = $(this);
                 if ($modal.find('img.slbImage').length) {
@@ -376,21 +379,16 @@ $(document).on('found_variation', function (e, variation) {
                 }
             });
 
-            // 2. Hide duplicate modals — keep only the last one that has an image visible
             var $validModals = $('.slbElement').filter(function() {
                 return $(this).find('img.slbImage').length > 0;
             });
 
             if ($validModals.length > 1) {
-                // Add a class to all but the last one so CSS can hide them
                 $validModals.slice(0, -1).addClass('slbDuplicate');
-                console.log('[Thready] Hiding ' + ($validModals.length - 1) + ' duplicate modal(s) via CSS');
             } else {
-                // Ensure no stray duplicate class remains
                 $('.slbElement').removeClass('slbDuplicate');
             }
 
-            // 3. Clean up the HTML class
             cleanupHtmlSlbActive();
         }, 150);
     }
@@ -399,6 +397,16 @@ $(document).on('found_variation', function (e, variation) {
     $(function () {
         var $wrap = getGalleryWrap();
         if ($wrap.length) {
+            patchSimpleLightboxDestroy();
+
+            // Safety fallback: if no variation fires within 3 seconds
+            // (e.g. no default variation set), reveal the gallery anyway
+            // so the user isn't staring at a blank space.
+            setTimeout(function() {
+                if (!$wrap.hasClass('thready-gallery-ready')) {
+                    revealGallery();
+                }
+            }, 3000);
 
             // Capture SimpleLightbox options from the theme's initial setup
             setTimeout(function() {

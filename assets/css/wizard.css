@@ -467,7 +467,29 @@
     overflow: hidden;
 }
 
-.wiz-print-preview.has-image { border-style: solid; background: #000; }
+.wiz-print-preview.has-image { 
+    border-style: solid; 
+    background: #e9e9e9;
+    align-items: flex-end;
+    flex-direction: column-reverse;
+}
+
+.wiz-print-preview.has-image .print-remove-btn {
+    border: none;
+    background: #fb3a3a;
+    border-radius: 50px;
+    color: white;
+    margin-top: 2px;
+    margin-right: 2px;
+    font-size: .75rem;
+    display: flex;
+    align-items: center;
+    align-content: center;
+    justify-content: center;
+    flex-direction: column;
+    cursor: pointer;
+}
+
 .wiz-print-preview img { width: 100%; height: 100%; object-fit: contain; }
 
 .wiz-print-preview .dashicons {
@@ -500,7 +522,6 @@
 }
 
 /* ── Positioning ────────────────────────────────────────────────────── */
-.wiz-position-section { }
 
 .wiz-position-heading {
     font-size: 15px;
@@ -837,7 +858,6 @@
 }
 
 /* ── Section divider within a step ─────────────────────────────────── */
-.wiz-section { }
 
 .wiz-section-title {
     font-size: 14px;
@@ -874,6 +894,7 @@
     background: var(--wiz-surface);
     overflow: hidden;
     transition: border-color .15s;
+    text-align: center;
 }
 
 .wiz-pi-card.is-selected {
@@ -961,9 +982,9 @@
 
 /* Pick button */
 .wiz-pi-pick {
-    display: block;
-    width: calc(100% - 24px);
-    margin: 10px 12px 12px;
+    display: block !important;
+    margin: 10px !important;
+    width: calc(100% - 20px);
     text-align: center;
     font-size: 12px !important;
     height: auto !important;

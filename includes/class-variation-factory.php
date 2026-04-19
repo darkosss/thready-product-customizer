@@ -212,9 +212,6 @@ class Thready_Variation_Factory {
         self::generate_variation_thumbnails( $product_id );
 
         // Generate 800×800 featured image + optional back gallery image.
-        // Set both via a single WC product object load+save to avoid cache
-        // conflicts (set_post_thumbnail uses raw meta, but a stale cached
-        // WC_Product::save() would overwrite it).
         if ( $args['featured_tip_slug'] && $args['featured_boja_slug'] ) {
             $featured_id = self::generate_featured_image(
                 $product_id,
@@ -223,19 +220,6 @@ class Thready_Variation_Factory {
                 $args['featured_side']
             );
 
-            $back_gallery_id = null;
-            if ( $args['print_back_id'] ) {
-                $back_side = $args['featured_side'] === 'back' ? 'front' : 'back';
-                $back_gallery_id = self::generate_featured_image(
-                    $product_id,
-                    $args['featured_tip_slug'],
-                    $args['featured_boja_slug'],
-                    $back_side,
-                    'gallery'   // different cleanup key from 'featured'
-                );
-                if ( is_wp_error( $back_gallery_id ) ) $back_gallery_id = null;
-            }
-
             // Flush WC object cache so we get a fresh product with current DB state
             clean_post_cache( $product_id );
             $product = wc_get_product( $product_id );
@@ -243,10 +227,25 @@ class Thready_Variation_Factory {
                 if ( $featured_id && ! is_wp_error( $featured_id ) ) {
                     $product->set_image_id( $featured_id );
                 }
-                if ( $back_gallery_id ) {
-                    $product->set_gallery_image_ids( [ $back_gallery_id ] );
-                }
                 $product->save();
+            }
+
+            // Generate back gallery image and add it to the product gallery
+            // via direct meta update AFTER save — this avoids triggering
+            // Greenshift's save_post hook which syncs _product_image_gallery
+            // into its own greenshiftwoo360_image_gallery meta.
+            if ( $args['print_back_id'] ) {
+                $back_side = $args['featured_side'] === 'back' ? 'front' : 'back';
+                $back_gallery_id = self::generate_featured_image(
+                    $product_id,
+                    $args['featured_tip_slug'],
+                    $args['featured_boja_slug'],
+                    $back_side,
+                    'gallery'
+                );
+                if ( $back_gallery_id && ! is_wp_error( $back_gallery_id ) ) {
+                    update_post_meta( $product_id, '_product_image_gallery', (string) $back_gallery_id );
+                }
             }
         }
 

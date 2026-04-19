@@ -7,11 +7,27 @@
 
 .slbElement:not(.slbThready) { display: none !important; }
 
-/*.slbThready + .slbThready { display: none !important; }*/
-
 .slbElement.slbLoading,
 .slbElement.slbDuplicate {
     display: none !important;
+}
+
+/* ── Initial gallery hide ─────────────────────────────────────────────
+   This CSS only loads on canvas-mode products (enqueued conditionally).
+   Hides the gallery until the first canvas composite is ready, preventing
+   the flash of the default featured image. JS removes the class after
+   the first render. The 3s animation-delay acts as a safety fallback —
+   if JS fails, the gallery auto-reveals.
+*/
+.gspb-product-image-gallery-wrap {
+    transition: opacity 0.35s ease;
+}
+.gspb-product-image-gallery-wrap:not(.thready-gallery-ready) {
+    opacity: 0; 
+}
+ 
+.gspb-product-image-gallery-wrap.thready-gallery-ready {
+    opacity: 1;
 }
 
 /* ── Loading state on gallery ───────────────────────────────────────── */
