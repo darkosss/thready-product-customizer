@@ -77,8 +77,8 @@ class Thready_Variation_Factory {
         );
 
         if ( $front_attach && ! is_wp_error( $front_attach ) ) {
-            $variation->set_image_id( $front_attach );
-            $variation->save();
+            // Use direct meta to avoid triggering another save hook cycle
+            update_post_meta( $variation_id, '_thumbnail_id', $front_attach );
         }
 
         // Generate back thumbnail if back print + back mockup exist
@@ -94,6 +94,8 @@ class Thready_Variation_Factory {
 
             if ( $back_attach && ! is_wp_error( $back_attach ) ) {
                 update_post_meta( $variation_id, '_thready_back_thumb_id', $back_attach );
+                // Add to variation gallery via direct meta
+                update_post_meta( $variation_id, '_product_image_gallery', (string) $back_attach );
             }
         }
     }
@@ -209,7 +211,10 @@ class Thready_Variation_Factory {
         // Pre-generate 150×150 variation thumbnails (cart, email, admin, gallery nav)
         self::generate_variation_thumbnails( $product_id );
 
-        // Generate 800×800 featured image
+        // Generate 800×800 featured image + optional back gallery image.
+        // Set both via a single WC product object load+save to avoid cache
+        // conflicts (set_post_thumbnail uses raw meta, but a stale cached
+        // WC_Product::save() would overwrite it).
         if ( $args['featured_tip_slug'] && $args['featured_boja_slug'] ) {
             $featured_id = self::generate_featured_image(
                 $product_id,
@@ -217,8 +222,31 @@ class Thready_Variation_Factory {
                 $args['featured_boja_slug'],
                 $args['featured_side']
             );
-            if ( $featured_id && ! is_wp_error( $featured_id ) ) {
-                set_post_thumbnail( $product_id, $featured_id );
+
+            $back_gallery_id = null;
+            if ( $args['print_back_id'] ) {
+                $back_side = $args['featured_side'] === 'back' ? 'front' : 'back';
+                $back_gallery_id = self::generate_featured_image(
+                    $product_id,
+                    $args['featured_tip_slug'],
+                    $args['featured_boja_slug'],
+                    $back_side,
+                    'gallery'   // different cleanup key from 'featured'
+                );
+                if ( is_wp_error( $back_gallery_id ) ) $back_gallery_id = null;
+            }
+
+            // Flush WC object cache so we get a fresh product with current DB state
+            clean_post_cache( $product_id );
+            $product = wc_get_product( $product_id );
+            if ( $product ) {
+                if ( $featured_id && ! is_wp_error( $featured_id ) ) {
+                    $product->set_image_id( $featured_id );
+                }
+                if ( $back_gallery_id ) {
+                    $product->set_gallery_image_ids( [ $back_gallery_id ] );
+                }
+                $product->save();
             }
         }
 
@@ -573,12 +601,11 @@ class Thready_Variation_Factory {
             );
 
             if ( $front_attach && ! is_wp_error( $front_attach ) ) {
-                $var = wc_get_product( (int) $row->ID );
-                if ( $var ) { $var->set_image_id( $front_attach ); $var->save(); }
                 $generated++;
             }
 
             // Generate BACK thumbnail (if back print + back base image exist)
+            $back_attach = null;
             if ( $back_print_id && $mockup['back'] ) {
                 $pos_back = $tip_positions[ $row->tip ]['back'] ?? [ 'x' => 50, 'y' => 25, 'width' => 50 ];
 
@@ -591,7 +618,22 @@ class Thready_Variation_Factory {
 
                 if ( $back_attach && ! is_wp_error( $back_attach ) ) {
                     update_post_meta( (int) $row->ID, '_thready_back_thumb_id', $back_attach );
+                } else {
+                    $back_attach = null;
                 }
+            }
+
+            // Save front image + back gallery in ONE wc_get_product/save call
+            // to avoid CRUD caching conflicts from multiple loads of the same ID.
+            $var = wc_get_product( (int) $row->ID );
+            if ( $var ) {
+                if ( $front_attach && ! is_wp_error( $front_attach ) ) {
+                    $var->set_image_id( $front_attach );
+                }
+                if ( $back_attach ) {
+                    $var->set_gallery_image_ids( [ $back_attach ] );
+                }
+                $var->save();
             }
         }
 
@@ -604,7 +646,7 @@ class Thready_Variation_Factory {
      *
      * @return int|WP_Error  Attachment ID on success.
      */
-    public static function generate_featured_image( $product_id, $tip_slug, $boja_slug, $side = 'front' ) {
+    public static function generate_featured_image( $product_id, $tip_slug, $boja_slug, $side = 'front', $image_type = 'featured' ) {
         $mockup = Thready_Mockup_Library::get_urls( $tip_slug, $boja_slug );
         if ( ! $mockup ) return new WP_Error( 'no_mockup', 'No mockup found.' );
 
@@ -627,7 +669,7 @@ class Thready_Variation_Factory {
             $product_id, 0,
             [ 'print_x' => $pos['x'], 'print_y' => $pos['y'],
               'print_width' => $pos['width'], 'base_image' => $base_url ],
-            $print_id, 'featured', 800
+            $print_id, $image_type, 800
         );
     }
 

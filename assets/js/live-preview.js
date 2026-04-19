@@ -4,6 +4,7 @@
  * Canvas compositor for products in canvas render mode.
  * Works with multi-tip products: variations = pa_tip-proizvoda × pa_boja.
  * Outputs WebP at 95% quality with PNG fallback.
+ * Updates existing Swiper slides in-place to avoid Greenshift conflicts.
  */
 /* global threadyCanvas, jQuery */
 (function ($) {
@@ -13,10 +14,9 @@
     if (!d) return;
 
     // ── Configuration ─────────────────────────────────────────────────────────
-    var MIN_LOADING_TIME = 150; // milliseconds = simulates transition delay for better user experience
-    var WEBP_QUALITY = 0.95;    // 95% quality for WebP
+    var MIN_LOADING_TIME = 300;
+    var WEBP_QUALITY = 0.95;
 
-    // Feature detection for WebP support
     var supportsWebP = false;
     var webPCheck = new Image();
     webPCheck.onload = function() { supportsWebP = true; };
@@ -27,49 +27,16 @@
     var cache = {};
     var currentTip = null;
     var currentBoja = null;
-    var currentView = 'front';
-    var originalGalleryHTML = null;
     var isCurrentVariationOnSale = false;
     var saleBadgeTimer = null;
+    var capturedLightboxOptions = null;
 
     var canvas = document.createElement('canvas');
     var ctx = canvas.getContext('2d');
 
-    var preloader = new Image();
-    preloader.crossOrigin = 'anonymous';
-
     // ── Gallery helpers ───────────────────────────────────────────────────────
-    function getGalleryImg() {
-        var selectors = [
-            '.woocommerce-product-gallery__image img',
-            '.gspb-product-image-gallery-wrap img',
-            '.gspb-product-image-gallery img',
-            '.swiper-slide-main-image img',
-        ];
-        for (var i = 0; i < selectors.length; i++) {
-            var $img = $(selectors[i]).first();
-            if ($img.length) return $img;
-        }
-        return $();
-    }
-
     function getGalleryWrap() {
-        var $img = getGalleryImg();
-        if ($img.length) {
-            var $wrap = $img.closest(
-                '.swiper-slide-main-image, ' +
-                '.woocommerce-product-gallery__image, ' +
-                '.gspb-product-image-gallery-wrap, ' +
-                '.gspb-product-image-gallery'
-            );
-            if ($wrap.length) return $wrap.first();
-            return $img.parent();
-        }
-        return $(
-            '.woocommerce-product-gallery__image, ' +
-            '.gspb-product-image-gallery-wrap, ' +
-            '.gspb-product-image-gallery'
-        ).first();
+        return $('.gspb-product-image-gallery-wrap').first();
     }
 
     // ── Debounced update for sale badge visibility ───────────────────────────
@@ -80,7 +47,6 @@
         saleBadgeTimer = setTimeout(function() {
             var $badge = $('.thready-sale-badge, .gspb-discountbox').first();
             if (!$badge.length) return;
-
             if (isOnSale) {
                 $badge.css('display', '');
             } else {
@@ -93,13 +59,15 @@
     // ── Notify zoom script after image update ─────────────────────────────────
     function refreshZoomForCurrentImage() {
         if (typeof window.threadyZoomRefresh === 'function') {
-            var $img = getGalleryImg();
-            if ($img.length) {
-                var container = $img.closest('.swiper-slide')[0];
-                if (container) {
-                    window.threadyZoomRefresh(container);
+            // Refresh zoom on ALL visible gallery slides (front + back),
+            // not just the first one. The back slide's image changes too
+            // and needs its zoom level recalculated.
+            $('.gspb-gallery-full .swiper-slide').each(function() {
+                var slide = this;
+                if ($(slide).find('img').length && $(slide).is(':visible')) {
+                    window.threadyZoomRefresh(slide);
                 }
-            }
+            });
         }
     }
 
@@ -110,87 +78,9 @@
         if ($('.slbElement:not(.slbLoading)').length) {
             $html.addClass('slbActive');
         }
-    }
-
-    // ── Refresh SimpleLightbox by destroying and recreating it ────────────────
-    function refreshLightbox() {
-        var $gallery = $('.gspb-gallery-full, .woocommerce-product-gallery');
-        if (!$gallery.length) return;
-
-        var $anchors = $gallery.find('a.imagelink, a.woocommerce-product-gallery__trigger, a[data-lightbox]');
-        if (!$anchors.length) return;
-
-        if (!$.fn.simpleLightbox) return;
-
-        $anchors.each(function () {
-            var instance = $(this).data('simpleLightbox');
-            if (instance && typeof instance.destroy === 'function') {
-                instance.destroy();
-            }
-            $(this).removeData('simpleLightbox');
-        });
-
-        var galleryInstance = $gallery.data('simpleLightbox');
-        if (galleryInstance && typeof galleryInstance.destroy === 'function') {
-            galleryInstance.destroy();
-            $gallery.removeData('simpleLightbox');
-        }
-
-        var options = $gallery.data('simpleLightboxOptions') || {};
-        $anchors.simpleLightbox(options);
-
-        setTimeout(cleanupHtmlSlbActive, 50);
-    }
-
-    // ── Update existing image src (no DOM replacement) ────────────────────────
-    function updateGalleryImage(blobUrl, mimeType) {
-        var $img = getGalleryImg();
-        var $wrap = getGalleryWrap();
-        if (!$img.length) return;
-
-        var visibleImg = $img[0];
-        var $anchor = $img.closest('a');
-
-        // Choose fake extension based on mime type for lightbox compatibility
-        var suffix = (mimeType === 'image/webp') ? '#.webp' : '#.png';
-        var displayUrl = blobUrl + suffix;
-
-        var imageLoadedPromise = new Promise(function (resolve, reject) {
-            preloader.onload = function () {
-                visibleImg.src = displayUrl;
-                if ($anchor.length) {
-                    $anchor.attr('href', displayUrl);
-                }
-                resolve();
-                preloader.onload = null;
-                preloader.onerror = null;
-            };
-            preloader.onerror = function () {
-                reject(new Error('Preload failed'));
-                preloader.onload = null;
-                preloader.onerror = null;
-            };
-            preloader.src = blobUrl;
-        });
-
-        var timerPromise = new Promise(function (resolve) {
-            setTimeout(resolve, MIN_LOADING_TIME);
-        });
-
-        Promise.all([imageLoadedPromise, timerPromise])
-            .then(function () {
-                requestAnimationFrame(function () {
-                    requestAnimationFrame(function () {
-                        $wrap.removeClass('thready-canvas-loading');
-                        refreshZoomForCurrentImage();
-                        debouncedUpdateSaleBadgeVisibility(isCurrentVariationOnSale);
-                        refreshLightbox();
-                    });
-                });
-            })
-            .catch(function () {
-                $wrap.removeClass('thready-canvas-loading');
-            });
+        //if ($('.slbElement').length) {
+            //$('.slbElement').remove();
+        //}
     }
 
     // ── Image loading ─────────────────────────────────────────────────────────
@@ -231,7 +121,6 @@
                 ctx.drawImage(print, px, py, tw, th);
             }
 
-            // Determine output format
             var mimeType = supportsWebP ? 'image/webp' : 'image/png';
             var quality = supportsWebP ? WEBP_QUALITY : undefined;
 
@@ -242,7 +131,6 @@
                         return;
                     }
                     var url = URL.createObjectURL(blob);
-                    // Store both URL and mime type in cache
                     cache[key] = { url: url, mimeType: mimeType };
                     resolve(cache[key]);
                 }, mimeType, quality);
@@ -250,107 +138,195 @@
         });
     }
 
-    // ── Update view ───────────────────────────────────────────────────────────
-    function updateView(tipSlug, bojaSlug, view, lightPrint) {
-        if (!tipSlug || !bojaSlug) return;
-
-        var mkKey = tipSlug + '|' + bojaSlug;
-        var mockup = (d.mockups || {})[mkKey];
-
-        if (!mockup) {
-            getGalleryWrap().removeClass('thready-canvas-loading');
-            return;
-        }
-
-        var baseUrl = view === 'back' && mockup.back ? mockup.back : mockup.front;
-        if (!baseUrl) {
-            getGalleryWrap().removeClass('thready-canvas-loading');
-            return;
-        }
-
-        var printUrl;
-        if (view === 'back') {
-            printUrl = d.print_back || '';
-        } else if (lightPrint && d.has_light) {
-            printUrl = d.print_light || '';
-        } else {
-            printUrl = d.print_front || '';
-        }
-
-        var tipPos = (d.tip_positions || {})[tipSlug] || {};
-        var pos = view === 'back' ? (tipPos.back || null) : (tipPos.front || { x: 50, y: 25, width: 50 });
-
-        getGalleryWrap().addClass('thready-canvas-loading');
-
-        composite(baseUrl, printUrl || null, pos)
-            .then(function (result) {
-                updateGalleryImage(result.url, result.mimeType);
-            })
-            .catch(function () {
-                getGalleryWrap().removeClass('thready-canvas-loading');
-            });
-    }
-
-    // ── Front / Back toggle UI ────────────────────────────────────────────────
-    function injectViewToggle() {
-        if (!d.has_back) return;
-        if ($('.thready-view-toggle').length) return;
-
-        var $wrap = getGalleryWrap();
-        if (!$wrap.length) return;
-
-        var html = '<div class="thready-view-toggle">'
-            + '<button type="button" class="tvt-btn tvt-active" data-view="front">Front</button>'
-            + '<button type="button" class="tvt-btn" data-view="back">Back</button>'
-            + '</div>';
-
-        $wrap.after(html);
-
-        $(document).on('click', '.tvt-btn', function () {
-            currentView = $(this).data('view');
-            $('.tvt-btn').removeClass('tvt-active');
-            $(this).addClass('tvt-active');
-            updateView(currentTip, currentBoja, currentView, false);
+    // ── Preload a single image (blob URL) ─────────────────────────────────────
+    function preloadImage(url) {
+        return new Promise(function (resolve, reject) {
+            var img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = function() { resolve(); };
+            img.onerror = function() { reject(new Error('Preload failed: ' + url)); };
+            img.src = url;
         });
     }
 
-    // ── WooCommerce variation events ──────────────────────────────────────────
-    $(document).on('found_variation', function (e, variation) {
-        var tipSlug = variation.thready_tip_slug || '';
-        var bojaSlug = variation.thready_boja_slug || '';
-        var lightPrint = !!variation.thready_light_print;
+    // ── Generate composites and preload them ──────────────────────────────────
+    function generateAndPreloadComposites(tipSlug, bojaSlug, lightPrint) {
+        var mkKey = tipSlug + '|' + bojaSlug;
+        var mockup = (d.mockups || {})[mkKey];
+        if (!mockup) return Promise.resolve([]);
 
-        tipSlug = tipSlug.toLowerCase().replace(/\s+/g, '-');
-        bojaSlug = bojaSlug.toLowerCase().replace(/\s+/g, '-');
+        var tipPos = (d.tip_positions || {})[tipSlug] || {};
+        var compositePromises = [];
 
-        currentTip = tipSlug;
-        currentBoja = bojaSlug;
-        currentView = 'front';
+        // Front composite (always)
+        var frontBase = mockup.front;
+        var frontPrint = lightPrint && d.has_light ? d.print_light : d.print_front;
+        var frontPos = tipPos.front || { x: 50, y: 25, width: 50 };
+        if (frontBase && frontPrint) {
+            compositePromises.push(
+                composite(frontBase, frontPrint, frontPos).then(function(result) {
+                    return preloadImage(result.url).then(function() {
+                        return { view: 'front', url: result.url, mimeType: result.mimeType };
+                    });
+                })
+            );
+        }
 
-        var isOnSale = variation.display_price !== undefined &&
-                       variation.display_regular_price !== undefined &&
-                       parseFloat(variation.display_price) < parseFloat(variation.display_regular_price);
-        isCurrentVariationOnSale = isOnSale;
-        debouncedUpdateSaleBadgeVisibility(isOnSale);
+        // Back composite (if available)
+        var backBase = mockup.back;
+        var backPrint = d.print_back;
+        var backPos = tipPos.back;
+        if (backBase && backPrint) {
+            compositePromises.push(
+                composite(backBase, backPrint, backPos || { x: 50, y: 25, width: 50 }).then(function(result) {
+                    return preloadImage(result.url).then(function() {
+                        return { view: 'back', url: result.url, mimeType: result.mimeType };
+                    });
+                })
+            );
+        }
 
-        $('.tvt-btn').removeClass('tvt-active');
-        $('.tvt-btn[data-view="front"]').addClass('tvt-active');
+        return Promise.all([
+            Promise.all(compositePromises),
+            new Promise(function(resolve) { setTimeout(resolve, MIN_LOADING_TIME); })
+        ]).then(function(results) {
+            return results[0];
+        });
+    }
 
-        injectViewToggle();
-        updateView(tipSlug, bojaSlug, 'front', lightPrint);
-        updateGalleryStrip(tipSlug, bojaSlug);
-    });
+    // ── Update existing Swiper slides in-place (no Swiper API) ───────────────
+    function updateGalleryInPlace(composites, productTitle) {
+        var $mainSlides = $('.gspb-gallery-full .swiper-slide');
+        var $thumbSlides = $('.gspb-gallery-thumb .swiper-slide');
+        var $thumbContainer = $('.gspb-gallery-thumb');
+
+        // Hide thumbnail container if only one composite, show otherwise
+        if (composites.length <= 1) {
+            $thumbContainer.hide();
+        } else {
+            $thumbContainer.show();
+        }
+
+        // Update main slides
+        composites.forEach(function(item, index) {
+            var $slide = $mainSlides.eq(index);
+            if (!$slide.length) return;
+
+            var suffix = item.mimeType === 'image/webp' ? '#.webp' : '#.png';
+            var displayUrl = item.url + suffix;
+
+            // Ensure the slide has an <a class="imagelink"> wrapper.
+            // Greenshift only wraps the featured image (first slide) in an
+            // anchor — gallery images (second slide onward) get a bare <img>.
+            // SimpleLightbox needs the anchor to bind to.
+            var $anchor = $slide.find('a.imagelink, a.woocommerce-product-gallery__trigger, a[data-lightbox]');
+            if (!$anchor.length) {
+                var $img = $slide.find('img');
+                if ($img.length) {
+                    $img.wrap('<a href="' + displayUrl + '" class="imagelink"></a>');
+                    $anchor = $img.parent('a');
+                }
+            }
+
+            $anchor.attr('href', displayUrl).attr('title', productTitle || '');
+            $slide.find('img')
+                .attr('src', displayUrl)
+                .attr('data-main-featured-image-src', displayUrl)
+                .attr('alt', productTitle || '');
+        });
+
+        // Update thumbnail slides
+        composites.forEach(function(item, index) {
+            var $thumb = $thumbSlides.eq(index);
+            if (!$thumb.length) return;
+
+            var suffix = item.mimeType === 'image/webp' ? '#.webp' : '#.png';
+            var displayUrl = item.url + suffix;
+
+            $thumb.find('img')
+                .attr('src', displayUrl)
+                .attr('data-main-featured-image-src', displayUrl);
+        });
+
+        // Hide any extra slides if composites count decreased
+        if ($mainSlides.length > composites.length) {
+            for (var i = composites.length; i < $mainSlides.length; i++) {
+                $mainSlides.eq(i).hide();
+                $thumbSlides.eq(i).hide();
+            }
+        } else {
+            // Ensure previously hidden slides are shown
+            $mainSlides.show();
+            $thumbSlides.show();
+        }
+
+        // Refresh lightbox on updated anchors
+        var $anchors = $('.gspb-gallery-full').find('a.imagelink, a.woocommerce-product-gallery__trigger, a[data-lightbox]');
+        if ($.fn.simpleLightbox && $anchors.length) {
+            $anchors.each(function() {
+                var instance = $(this).data('simpleLightbox');
+                if (instance && typeof instance.destroy === 'function') {
+                    instance.destroy();
+                }
+                $(this).removeData('simpleLightbox');
+            });
+
+            // Remove stale lightbox modal DOM nodes
+            $('.slbElement').remove();
+            $('html').removeClass('slbActive');
+
+            var options = capturedLightboxOptions || {};
+            $anchors.simpleLightbox(options);
+        }
+
+        refreshZoomForCurrentImage();
+        cleanupHtmlSlbActive();
+    }
+
+// ── WooCommerce variation events ──────────────────────────────────────────
+$(document).on('found_variation', function (e, variation) {
+    var tipSlug = variation.thready_tip_slug || '';
+    var bojaSlug = variation.thready_boja_slug || '';
+    var lightPrint = !!variation.thready_light_print;
+    var productTitle = $('.product_title').text() || '';
+
+    tipSlug = tipSlug.toLowerCase().replace(/\s+/g, '-');
+    bojaSlug = bojaSlug.toLowerCase().replace(/\s+/g, '-');
+
+    currentTip = tipSlug;
+    currentBoja = bojaSlug;
+
+    var isOnSale = variation.display_price !== undefined &&
+                   variation.display_regular_price !== undefined &&
+                   parseFloat(variation.display_price) < parseFloat(variation.display_regular_price);
+    isCurrentVariationOnSale = isOnSale;
+    debouncedUpdateSaleBadgeVisibility(isOnSale);
+
+    var $wrap = getGalleryWrap();
+    $wrap.addClass('thready-canvas-loading');
+
+    generateAndPreloadComposites(tipSlug, bojaSlug, lightPrint)
+        .then(function(composites) {
+            if (composites.length) {
+                updateGalleryInPlace(composites, productTitle);
+            }
+            $wrap.removeClass('thready-canvas-loading');
+            // Reapply sale badge visibility after gallery update
+            debouncedUpdateSaleBadgeVisibility(isOnSale);
+        })
+        .catch(function(err) {
+            console.error('[Thready] Composite/preload failed:', err);
+            $wrap.removeClass('thready-canvas-loading');
+            debouncedUpdateSaleBadgeVisibility(isOnSale);
+        });
+});
 
     $(document).on('reset_data hide_variation', function () {
         currentTip = null;
         currentBoja = null;
-        currentView = 'front';
         isCurrentVariationOnSale = false;
         debouncedUpdateSaleBadgeVisibility(false);
-
-        if (originalGalleryHTML) {
-            getGalleryWrap().html(originalGalleryHTML);
-        }
+        // Greenshift will reset the gallery itself; we just need to clean up our loading class
         getGalleryWrap().removeClass('thready-canvas-loading');
     });
 
@@ -363,59 +339,34 @@
         }
     });
 
-    // ── Gallery thumbnail strip ──────────────────────────────────────────────
-    function updateGalleryStrip(tipSlug, bojaSlug) {
-        var key = tipSlug + '|' + bojaSlug;
-        var thumbs = (d.thumbnails || {})[key];
-        var $strip = $('.flex-control-nav.flex-control-thumbs, .woocommerce-product-gallery__thumbnail-strip');
+    // ── Patch SimpleLightbox.destroy to prevent errors when modal is already gone ─
+    function patchSimpleLightboxDestroy() {
+        if (!window.SimpleLightbox || window.SimpleLightbox._patched) return;
 
-        if (!$strip.length || !thumbs) return;
-
-        var items = [];
-        if (thumbs.front) items.push({ url: thumbs.front, view: 'front', label: 'Front' });
-        if (thumbs.back && d.has_back) items.push({ url: thumbs.back, view: 'back', label: 'Back' });
-        if (!items.length) return;
-
-        $strip.empty();
-
-        items.forEach(function (item) {
-            var $li = $('<li>');
-            var $img = $('<img>')
-                .attr({ src: item.url, alt: item.label })
-                .css({ cursor: 'pointer', opacity: item.view === 'front' ? 1 : 0.6 });
-
-            $li.append($img).appendTo($strip);
-
-            $img.on('click', function () {
-                currentView = item.view;
-                $strip.find('img').css('opacity', 0.6);
-                $(this).css('opacity', 1);
-
-                $('.tvt-btn').removeClass('tvt-active');
-                $('.tvt-btn[data-view="' + item.view + '"]').addClass('tvt-active');
-
-                updateView(tipSlug, bojaSlug, item.view, false);
-            });
-        });
+        var originalDestroy = window.SimpleLightbox.prototype.destroy;
+        window.SimpleLightbox.prototype.destroy = function() {
+            if (this.$el && this.$el.parentNode) {
+                originalDestroy.call(this);
+            } else {
+                // Modal already removed; just clean up events and call afterDestroy
+                if (this.options && typeof this.options.afterDestroy === 'function') {
+                    this.options.afterDestroy(this);
+                }
+                // Remove any event listeners if needed (simplified)
+                if (this.eventRegistry) {
+                    this.removeEvents('lightbox');
+                    this.removeEvents('thumbnails');
+                }
+            }
+        };
+        window.SimpleLightbox._patched = true;
+        console.log('[Thready] Patched SimpleLightbox.destroy for safety');
     }
 
-    // ── Capture original lightbox options ─────────────────────────────────────
-    function captureLightboxOptions() {
-        var $gallery = $('.gspb-gallery-full, .woocommerce-product-gallery');
-        if (!$gallery.length) return;
-
-        var $anchors = $gallery.find('a.imagelink, a.woocommerce-product-gallery__trigger, a[data-lightbox]');
-        if (!$anchors.length) return;
-
-        var instance = $anchors.first().data('simpleLightbox');
-        if (instance && instance.options) {
-            $gallery.data('simpleLightboxOptions', instance.options);
-        }
-    }
-
-    // ── Tag the real image modal with slbThready (safe method) ────────────────
+    // ── Tag the real image modal with slbThready and hide duplicates ─────────────
     function tagRealImageModal() {
         setTimeout(function() {
+            // 1. Tag modals that actually contain an image
             $('.slbElement').each(function() {
                 var $modal = $(this);
                 if ($modal.find('img.slbImage').length) {
@@ -424,6 +375,23 @@
                     $modal.removeClass('slbThready');
                 }
             });
+
+            // 2. Hide duplicate modals — keep only the last one that has an image visible
+            var $validModals = $('.slbElement').filter(function() {
+                return $(this).find('img.slbImage').length > 0;
+            });
+
+            if ($validModals.length > 1) {
+                // Add a class to all but the last one so CSS can hide them
+                $validModals.slice(0, -1).addClass('slbDuplicate');
+                console.log('[Thready] Hiding ' + ($validModals.length - 1) + ' duplicate modal(s) via CSS');
+            } else {
+                // Ensure no stray duplicate class remains
+                $('.slbElement').removeClass('slbDuplicate');
+            }
+
+            // 3. Clean up the HTML class
+            cleanupHtmlSlbActive();
         }, 150);
     }
 
@@ -431,13 +399,17 @@
     $(function () {
         var $wrap = getGalleryWrap();
         if ($wrap.length) {
-            originalGalleryHTML = $wrap.html();
-            $wrap.addClass('thready-canvas-loading');
-            setTimeout(function () {
-                $wrap.removeClass('thready-canvas-loading');
-            }, MIN_LOADING_TIME + 500);
 
-            captureLightboxOptions();
+            // Capture SimpleLightbox options from the theme's initial setup
+            setTimeout(function() {
+                var $a = $('.gspb-gallery-full').find('a.imagelink').first();
+                if ($a.length && $a.data('simpleLightbox')) {
+                    var inst = $a.data('simpleLightbox');
+                    if (inst && inst.options) {
+                        capturedLightboxOptions = $.extend({}, inst.options);
+                    }
+                }
+            }, 500);
 
             $(document).on('click', '.slbCloseBtn, .slbOverlay', function() {
                 setTimeout(cleanupHtmlSlbActive, 100);
@@ -455,6 +427,8 @@
                 isCurrentVariationOnSale = hasSale;
                 debouncedUpdateSaleBadgeVisibility(hasSale);
             }
+
+            $('.thready-view-toggle').remove();
         }
     });
 

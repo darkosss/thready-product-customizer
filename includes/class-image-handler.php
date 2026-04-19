@@ -155,9 +155,11 @@ class Thready_Image_Handler {
             $descriptive_parts[] = 'light';
         }
         
-        // Add image type indicator
-        if ($image_type === 'back') {
-            $descriptive_parts[] = 'back';
+        // Add image type indicator — always include it in the filename
+        // so front, back, featured, gallery all get unique filenames
+        // even when product_id + variation_id + timestamp are identical.
+        if ($image_type && $image_type !== 'front') {
+            $descriptive_parts[] = $image_type;
         }
         
         // Combine all parts
@@ -175,7 +177,7 @@ class Thready_Image_Handler {
         $filepath = $upload_dir['path'] . '/' . $filename;
         
         // Clean up any existing pending images for this variation and type
-        self::cleanup_pending_images($variation_id, $image_type);
+        self::cleanup_pending_images($variation_id, $image_type, $product_id);
         
         // Create image resources with memory optimization
         $base = self::create_image_resource($base_url);
@@ -347,26 +349,36 @@ class Thready_Image_Handler {
         return false;
     }
     
-    private static function cleanup_pending_images($variation_id, $image_type = 'front') {
-        // Find all pending images for this variation and type
+    private static function cleanup_pending_images($variation_id, $image_type = 'front', $product_id = 0) {
+        // Find existing images for this variation/product and type
+        $meta_query = [
+            'relation' => 'AND',
+            [
+                'key' => '_thready_variation_id',
+                'value' => $variation_id,
+                'compare' => '='
+            ],
+            [
+                'key' => '_thready_image_type',
+                'value' => $image_type,
+                'compare' => '='
+            ]
+        ];
+
         $args = [
             'post_type' => 'attachment',
             'post_status' => 'inherit',
             'posts_per_page' => -1,
-            'meta_query' => [
-                'relation' => 'AND',
-                [
-                    'key' => '_thready_variation_id',
-                    'value' => $variation_id,
-                    'compare' => '='
-                ],
-                [
-                    'key' => '_thready_image_type',
-                    'value' => $image_type,
-                    'compare' => '='
-                ]
-            ]
+            'meta_query' => $meta_query,
         ];
+
+        // CRITICAL: When variation_id is 0 (featured images), scope by
+        // post_parent so we ONLY delete images belonging to THIS product.
+        // Without this, creating product B deletes product A's featured image
+        // because both have _thready_variation_id = 0.
+        if ( $product_id > 0 ) {
+            $args['post_parent'] = $product_id;
+        }
         
         $attachments = get_posts($args);
         

@@ -7,6 +7,13 @@
 
 .slbElement:not(.slbThready) { display: none !important; }
 
+/*.slbThready + .slbThready { display: none !important; }*/
+
+.slbElement.slbLoading,
+.slbElement.slbDuplicate {
+    display: none !important;
+}
+
 /* ── Loading state on gallery ───────────────────────────────────────── */
 
 .thready-canvas-loading {

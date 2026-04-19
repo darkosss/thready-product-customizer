@@ -739,7 +739,7 @@
     function renderPositioning() {
         var h = '<div class="wizard-step">';
         h += '<h2 class="step-title">Print Positioning</h2>';
-        h += '<p class="step-subtitle">Set print position and size per product type. Preview shows the first selected color.</p>';
+        h += '<p class="step-subtitle">Set print position and size per product type. Preview uses white (Bela) base image for best visibility.</p>';
 
         S.tipSlugs.forEach( function ( t ) {
             var tip  = getTip( t );
@@ -747,13 +747,15 @@
             var pf   = pos.front || { x:50, y:25, width:50 };
             var pb   = pos.back  || { x:50, y:25, width:50 };
 
-            var firstBoja = getFirstSelectedBoja( t );
-            var mk = ( d.mockup_map || {} )[ t + '|' + firstBoja ] || {};
+            // Always prefer "bela" (white) mockup for positioning — easier to see print placement.
+            // Fall back to first selected color if bela has no mockup.
+            var posBoja = getPositioningBoja( t );
+            var mk = ( d.mockup_map || {} )[ t + '|' + posBoja ] || {};
 
             h += '<div class="wiz-tip-position" data-tip="' + esc( t ) + '">';
             h += '<h4 class="tip-pos-title">' + esc( tip.name ) + '</h4>';
-            if ( firstBoja ) {
-                h += '<p class="tip-pos-color-note">Preview: ' + esc( getBoja( firstBoja ).name ) + '</p>';
+            if ( posBoja ) {
+                h += '<p class="tip-pos-color-note">Preview: ' + esc( getBoja( posBoja ).name ) + '</p>';
             }
 
             // Front panel
@@ -788,8 +790,8 @@
 
         // Draw canvases
         S.tipSlugs.forEach( function ( t ) {
-            var firstBoja = getFirstSelectedBoja( t );
-            var mk   = ( d.mockup_map || {} )[ t + '|' + firstBoja ] || {};
+            var posBoja = getPositioningBoja( t );
+            var mk   = ( d.mockup_map || {} )[ t + '|' + posBoja ] || {};
             var pos  = S.tipPositions[ t ] || { front: { x:50, y:25, width:50 }, back: null };
             drawCanvas( t, 'front', mk.front_url || '', S.printFrontUrl, pos.front || { x:50, y:25, width:50 } );
             if ( S.printBackId ) {
@@ -801,8 +803,8 @@
             var t    = $( this ).data( 'tip' );
             var side = $( this ).data( 'side' );
             var pos  = readPos( t, side );
-            var firstBoja = getFirstSelectedBoja( t );
-            var mk   = ( d.mockup_map || {} )[ t + '|' + firstBoja ] || {};
+            var posBoja = getPositioningBoja( t );
+            var mk   = ( d.mockup_map || {} )[ t + '|' + posBoja ] || {};
             var base  = side === 'front' ? ( mk.front_url || '' ) : ( mk.back_url || '' );
             var print = side === 'front' ? S.printFrontUrl : S.printBackUrl;
             drawCanvas( t, side, base, print, pos );
@@ -884,7 +886,7 @@
 
             h += '<button type="button" class="button ' + ( isSelected ? 'button-primary' : '' )
                + ' wiz-pi-pick" data-tip="' + esc( t ) + '">';
-            h += isSelected ? '✓ Selected' : 'Use This';
+            h += isSelected ? '✓ Selected' : 'Select';
             h += '</button>';
 
             h += '</div>'; // .wiz-pi-card
@@ -893,15 +895,7 @@
         h += '</div></div>'; // .wiz-pi-grid + .wizard-step
         $body.html( h );
 
-        // Auto-select first tip if nothing chosen yet
-        if ( ! S.featuredTipSlug && S.tipSlugs.length ) {
-            var ft = S.tipSlugs[0];
-            var fc = Object.keys( S.tipColors[ ft ] || {} )
-                .filter( function ( b ) { return ( S.tipColors[ ft ] || {} )[ b ].selected; } )[0] || '';
-            selectFeatured( ft, fc, 'front', false );
-        }
-
-        // Draw all canvases
+        // Draw all canvases (no auto-select — user must explicitly pick)
         S.tipSlugs.forEach( function ( t ) {
             drawPiCanvas( t );
         } );
@@ -915,7 +909,7 @@
         S.featuredSide     = side || 'front';
 
         $( '.wiz-pi-card' ).removeClass( 'is-selected' );
-        $( '.wiz-pi-pick' ).removeClass( 'button-primary' ).text( 'Use This' );
+        $( '.wiz-pi-pick' ).removeClass( 'button-primary' ).text( 'Select' );
 
         var $card = $( '.wiz-pi-card[data-tip="' + tipSlug + '"]' );
         $card.addClass( 'is-selected' );
@@ -1179,6 +1173,18 @@
     function getFirstSelectedBoja( tipSlug ) {
         var colors = S.tipColors[ tipSlug ] || {};
         return Object.keys( colors ).find( function ( b ) { return colors[ b ].selected; } ) || '';
+    }
+
+    /**
+     * For positioning preview, prefer "bela" (white) base image — it gives
+     * the best visibility for print placement. Falls back to first selected
+     * color if bela has no mockup for this tip.
+     */
+    function getPositioningBoja( tipSlug ) {
+        var belaSlug = 'bela';
+        var mk = ( d.mockup_map || {} )[ tipSlug + '|' + belaSlug ] || {};
+        if ( mk.has_front || mk.front_url ) return belaSlug;
+        return getFirstSelectedBoja( tipSlug );
     }
 
     function esc( s ) { return $( '<span>' ).text( String( s ) ).html(); }
