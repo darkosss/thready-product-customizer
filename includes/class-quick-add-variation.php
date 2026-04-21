@@ -37,15 +37,22 @@ class Thready_Quick_Add_Variation {
 
         $tips_with_mockups = Thready_Mockup_Library::get_tips_with_mockups();
         $tip_data = [];
-        $tip_mockup_bojas = []; // { tip_slug: [boja_slug, ...] }
+        // { tip_slug: { boja_slug: { front: bool, back: bool }, ... } }
+        $tip_mockup_detail = [];
         foreach ( $tips_with_mockups as $slug ) {
             $term = get_term_by( 'slug', $slug, THREADY_TAX_TIP );
             if ( ! $term ) continue;
             $tip_data[] = [ 'slug' => $slug, 'name' => $term->name ];
 
-            // Collect which boja slugs have mockups for this tip
             $mockups = Thready_Mockup_Library::get_for_tip( $slug );
-            $tip_mockup_bojas[ $slug ] = array_keys( $mockups );
+            $detail  = [];
+            foreach ( $mockups as $boja_slug => $row ) {
+                $detail[ $boja_slug ] = [
+                    'front' => ! empty( $row->front_image ),
+                    'back'  => ! empty( $row->back_image ),
+                ];
+            }
+            $tip_mockup_detail[ $slug ] = $detail;
         }
         if ( empty( $tip_data ) ) return;
 
@@ -79,19 +86,20 @@ class Thready_Quick_Add_Variation {
         $nonce      = wp_create_nonce( 'thready_quick_add_variation' );
 
         $js_data = wp_json_encode( [
-            'productId'      => $product_id,
-            'nonce'          => $nonce,
-            'tips'           => $tip_data,
-            'existingTips'   => $existing_tips,
-            'existingCombos' => array_keys( $existing_map ),
-            'tipPrices'      => (object) $tip_prices,
-            'tipSizes'       => (object) $tip_sizes,
-            'tipMockupBojas' => (object) $tip_mockup_bojas,
-            'bojas'          => $boja_data,
-            'sizes'          => $size_data,
-            'hasLight'       => $has_light,
-            'currency'       => $currency,
-            'wizardUrl'      => $wizard_url,
+            'productId'       => $product_id,
+            'nonce'           => $nonce,
+            'tips'            => $tip_data,
+            'existingTips'    => $existing_tips,
+            'existingCombos'  => array_keys( $existing_map ),
+            'tipPrices'       => (object) $tip_prices,
+            'tipSizes'        => (object) $tip_sizes,
+            'tipMockupDetail' => (object) $tip_mockup_detail,
+            'hasBack'         => (bool) get_post_meta( $product_id, '_thready_back_print_image', true ),
+            'bojas'           => $boja_data,
+            'sizes'           => $size_data,
+            'hasLight'        => $has_light,
+            'currency'        => $currency,
+            'wizardUrl'       => $wizard_url,
         ] );
         ?>
 
@@ -273,17 +281,32 @@ class Thready_Quick_Add_Variation {
                     panels += '<button type="button" class="button button-small qav-none" data-tip="' + slug + '">None</button>';
                     panels += '</div>';
                     panels += '<div class="qav-list">';
-                    var mockupBojas = (D.tipMockupBojas && D.tipMockupBojas[slug]) || [];
+                    var mockupDetail = (D.tipMockupDetail && D.tipMockupDetail[slug]) || {};
+                    var needsBack = D.hasBack;
                     D.bojas.forEach(function(b) {
-                        var exists    = D.existingCombos.indexOf(slug + '|' + b.slug) !== -1;
-                        var hasMockup = mockupBojas.indexOf(b.slug) !== -1;
-                        var isOff     = exists || !hasMockup;
+                        var exists = D.existingCombos.indexOf(slug + '|' + b.slug) !== -1;
+                        var md = mockupDetail[b.slug] || {};
+                        var hasFront = !!md.front;
+                        var hasBackImg = !!md.back;
+
+                        // Determine mockup status
+                        var mockupOk = hasFront && (!needsBack || hasBackImg);
+                        var mockupLabel = '';
+                        if (!hasFront && (!needsBack || !hasBackImg)) {
+                            mockupLabel = 'no mockup';
+                        } else if (!hasFront) {
+                            mockupLabel = 'no front mockup';
+                        } else if (needsBack && !hasBackImg) {
+                            mockupLabel = 'no back mockup';
+                        }
+
+                        var isOff = exists || !mockupOk;
                         panels += '<label class="qav-row qav-color-row' + (isOff ? ' is-off' : '') + '" data-tip="' + slug + '" data-boja="' + b.slug + '">';
                         panels += '<input type="checkbox" class="qav-boja-cb" data-tip="' + slug + '" value="' + b.slug + '"' + (isOff ? ' disabled' : '') + '>';
                         if (b.hex) panels += '<span class="qav-swatch" style="background:' + b.hex + '"></span>';
                         panels += '<span>' + esc(b.name) + '</span>';
                         if (exists) panels += '<span class="qav-tag">exists</span>';
-                        else if (!hasMockup) panels += '<span class="qav-tag qav-tag-warn">no mockup</span>';
+                        else if (mockupLabel) panels += '<span class="qav-tag qav-tag-warn">' + mockupLabel + '</span>';
                         panels += '</label>';
                     });
                     panels += '</div>';

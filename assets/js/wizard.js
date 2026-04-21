@@ -790,15 +790,33 @@
         h += '</div>';
 
         h += '<div class="wiz-color-grid-full">';
+        var needsBack = S.printBackId > 0;
         ( d.bojas || [] ).forEach( function ( b ) {
             var colorState = tipColorState[ b.slug ] || { selected: false, lightPrint: false };
             var chk        = colorState.selected;
             var lp         = colorState.lightPrint;
             var mk         = ( d.mockup_map || {} )[ tipSlug + '|' + b.slug ] || {};
 
+            // Determine mockup availability
+            var hasFront   = !! mk.has_front;
+            var hasBackImg = !! mk.has_back;
+            var mockupOk   = hasFront && ( ! needsBack || hasBackImg );
+            var mockupLabel = '';
+            if ( ! hasFront && ( ! needsBack || ! hasBackImg ) ) {
+                mockupLabel = 'no mockup';
+            } else if ( ! hasFront ) {
+                mockupLabel = 'no front mockup';
+            } else if ( needsBack && ! hasBackImg ) {
+                mockupLabel = 'no back mockup';
+            }
+
+            // Disable checkbox if mockup requirements not met
+            if ( ! mockupOk ) chk = false;
+
             h += '<div class="wiz-color-card-wrap ' + ( chk ? 'is-selected' : '' ) + '">';
-            h += '<label class="wiz-color-card ' + ( chk ? 'is-checked' : '' ) + ( ! mk.has_front ? ' no-mockup' : '' ) + '">';
-            h += '<input type="checkbox" class="boja-cb" data-tip="' + esc( tipSlug ) + '" value="' + esc( b.slug ) + '" ' + ( chk ? 'checked' : '' ) + '>';
+            h += '<label class="wiz-color-card ' + ( chk ? 'is-checked' : '' ) + ( ! mockupOk ? ' no-mockup' : '' ) + '">';
+            h += '<input type="checkbox" class="boja-cb" data-tip="' + esc( tipSlug ) + '" value="' + esc( b.slug ) + '" '
+               + ( chk ? 'checked' : '' ) + ( ! mockupOk ? ' disabled' : '' ) + '>';
 
             if ( b.hex ) h += '<span class="wiz-swatch" style="background:' + esc( b.hex ) + ';"></span>';
             else         h += '<span class="wiz-swatch swatch-empty"></span>';
@@ -810,13 +828,14 @@
             }
 
             h += '<span class="wiz-color-name">' + esc( b.name ) + '</span>';
-            if ( ! mk.has_front ) h += '<span class="wiz-no-mockup-badge">!</span>';
+            if ( mockupLabel ) h += '<span class="wiz-no-mockup-badge" title="' + esc( mockupLabel ) + '">!</span>';
             h += '</label>';
 
             if ( hasLight ) {
                 h += '<label class="wiz-light-print-label" id="lp-wrap-' + esc( tipSlug ) + '-' + esc( b.slug ) + '" '
                    + 'style="' + ( chk ? '' : 'display:none;' ) + '">';
-                h += '<input type="checkbox" id="lp-' + esc( tipSlug ) + '-' + esc( b.slug ) + '" ' + ( lp ? 'checked' : '' ) + '>';
+                h += '<input type="checkbox" id="lp-' + esc( tipSlug ) + '-' + esc( b.slug ) + '" ' + ( lp ? 'checked' : '' )
+                   + ( ! mockupOk ? ' disabled' : '' ) + '>';
                 h += ' Light print';
                 h += '</label>';
             }
@@ -826,7 +845,10 @@
         h += '</div>';
 
         var missingCount = ( d.bojas || [] ).filter( function ( b ) {
-            return ! ( ( d.mockup_map || {} )[ tipSlug + '|' + b.slug ] || {} ).has_front;
+            var mk = ( d.mockup_map || {} )[ tipSlug + '|' + b.slug ] || {};
+            var hasFront = !! mk.has_front;
+            var hasBackImg = !! mk.has_back;
+            return ! hasFront || ( needsBack && ! hasBackImg );
         } ).length;
         if ( missingCount ) {
             h += '<p class="wiz-warn-inline" style="margin-top:8px;">⚠ ' + missingCount
@@ -872,18 +894,22 @@
         } );
 
         $body.on( 'click.wiz', '.boja-all-btn', function () {
-            $body.find( '.boja-cb' ).prop( 'checked', true )
+            $body.find( '.boja-cb:not(:disabled)' ).prop( 'checked', true )
                 .closest( '.wiz-color-card' ).addClass( 'is-checked' );
-            $body.find( '.wiz-color-card-wrap' ).addClass( 'is-selected' );
-            if ( hasLight ) $body.find( '[id^="lp-wrap-"]' ).show();
+            $body.find( '.boja-cb:not(:disabled)' ).closest( '.wiz-color-card-wrap' ).addClass( 'is-selected' );
+            if ( hasLight ) $body.find( '.boja-cb:not(:disabled)' ).each( function () {
+                $( '#lp-wrap-' + tipSlug + '-' + $( this ).val() ).show();
+            } );
             updateVarCount( tipSlug );
         } );
 
         $body.on( 'click.wiz', '.boja-none-btn', function () {
-            $body.find( '.boja-cb' ).prop( 'checked', false )
+            $body.find( '.boja-cb:not(:disabled)' ).prop( 'checked', false )
                 .closest( '.wiz-color-card' ).removeClass( 'is-checked' );
-            $body.find( '.wiz-color-card-wrap' ).removeClass( 'is-selected' );
-            if ( hasLight ) $body.find( '[id^="lp-wrap-"]' ).hide();
+            $body.find( '.boja-cb:not(:disabled)' ).closest( '.wiz-color-card-wrap' ).removeClass( 'is-selected' );
+            if ( hasLight ) $body.find( '.boja-cb:not(:disabled)' ).each( function () {
+                $( '#lp-wrap-' + tipSlug + '-' + $( this ).val() ).hide();
+            } );
             updateVarCount( tipSlug );
         } );
 
