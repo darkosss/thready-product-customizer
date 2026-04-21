@@ -52,6 +52,9 @@ require_once THREADY_PC_PATH . 'includes/class-couple-mode-variations-admin.php'
 // Custom Order Request (product-level textarea)
 require_once THREADY_PC_PATH . 'includes/class-admin-custom-order-request.php';
 
+// Quick Add Variation (product edit screen)
+require_once THREADY_PC_PATH . 'includes/class-quick-add-variation.php';
+
 // Couple Mode (cart / checkout / order meta)
 require_once THREADY_PC_PATH . 'includes/class-couple-mode-cart.php';
 
@@ -104,6 +107,9 @@ add_action('plugins_loaded', function () {
     if ( class_exists('Thready_Custom_Order_Request') && method_exists('Thready_Custom_Order_Request', 'init') ) {
         Thready_Custom_Order_Request::init();
     }
+
+    // Quick Add Variation (product edit metabox)
+    Thready_Quick_Add_Variation::init();
 });
 
 // Create merged images directory + mockup DB table

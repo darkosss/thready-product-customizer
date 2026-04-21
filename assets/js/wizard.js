@@ -44,9 +44,15 @@
         S.tipSlugs    = ed.tips           || [];
         S.tipPrices   = ed.tip_prices     || {};
         S.tipPositions = ed.tip_positions || {};
-        S.printFrontId = ed.print_front_id || 0;
-        S.printLightId = ed.print_light_id || 0;
-        S.printBackId  = ed.print_back_id  || 0;
+        S.printFrontId    = ed.print_front_id    || 0;
+        S.printFrontUrl   = ed.print_front_url   || '';
+        S.printFrontThumb = ed.print_front_thumb || '';
+        S.printLightId    = ed.print_light_id    || 0;
+        S.printLightUrl   = ed.print_light_url   || '';
+        S.printLightThumb = ed.print_light_thumb || '';
+        S.printBackId     = ed.print_back_id     || 0;
+        S.printBackUrl    = ed.print_back_url    || '';
+        S.printBackThumb  = ed.print_back_thumb  || '';
         if ( ed.tip_colors ) S.tipColors = ed.tip_colors;
         if ( ed.tip_sizes  ) S.tipSizes  = ed.tip_sizes;
     }
@@ -194,6 +200,9 @@
                     var t = S.tipSlugs[ i ];
                     if ( ! S.tipPrices[ t ] || ! S.tipPrices[ t ].regular || S.tipPrices[ t ].regular <= 0 ) {
                         return err( 'Enter a regular price for each product type.' );
+                    }
+                    if ( S.tipPrices[ t ].sale !== null && S.tipPrices[ t ].sale >= S.tipPrices[ t ].regular ) {
+                        return err( 'Sale price must be lower than regular price for ' + getTip( t ).name + '.' );
                     }
                 }
                 return true;
@@ -929,7 +938,11 @@
                 || Object.keys( S.tipColors[ tipSlug ] || {} )
                    .filter( function ( b ) { return ( S.tipColors[ tipSlug ] || {} )[ b ].selected; } )[0]
                 || '' );
-        var side       = isSelected ? S.featuredSide : 'front';
+
+        // Read the active side from the toggle button for THIS card,
+        // not just from S.featuredSide (which only applies to the selected card).
+        var $activeSide = $( '.wiz-pi-side.active[data-tip="' + tipSlug + '"]' );
+        var side        = $activeSide.length ? $activeSide.data( 'side' ) : 'front';
 
         var mk       = ( d.mockup_map || {} )[ tipSlug + '|' + bojaSlug ] || {};
         var baseUrl  = side === 'back' ? ( mk.back_url || '' ) : ( mk.front_url || '' );
@@ -1103,7 +1116,8 @@
     // ── Create product ────────────────────────────────────────────────────────
 
     function createProduct() {
-        $btnNext.prop( 'disabled', true ).text( 'Creating…' );
+        var isEdit = d.edit_data && d.edit_data.product_id;
+        $btnNext.prop( 'disabled', true ).text( isEdit ? 'Saving…' : 'Creating…' );
         $errMsg.text( '' );
 
         var tipColorsPayload = {};
@@ -1128,6 +1142,11 @@
             featured_side      : S.featuredSide,
         };
 
+        // In edit mode, include product_id so PHP uses sync_variations
+        if ( d.edit_data && d.edit_data.product_id ) {
+            payload.product_id = d.edit_data.product_id;
+        }
+
         $.post( d.ajax_url, {
             action      : 'thready_wizard_create',
             _ajax_nonce : d.nonce,
@@ -1150,8 +1169,10 @@
 
     function showResult( data ) {
         $btnNext.hide(); $btnBack.hide();
+        var isEdit = d.edit_data && d.edit_data.product_id;
+        var verb   = isEdit ? 'updated' : 'created';
         var h = '<div class="result-item result-ok">';
-        h += '✓ <strong>' + esc( S.name ) + '</strong> created — ' + data.variation_count + ' variations. ';
+        h += '✓ <strong>' + esc( S.name ) + '</strong> ' + verb + ' — ' + data.variation_count + ' variations. ';
         h += '<a href="' + esc( data.edit_url ) + '" class="button button-small">Edit</a> ';
         h += '<a href="' + esc( data.view_url ) + '" class="button button-small" target="_blank">View</a>';
         h += '</div>';

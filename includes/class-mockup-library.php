@@ -134,6 +134,18 @@ class Thready_Mockup_Library {
         ];
     }
 
+    /**
+     * Get distinct tip_slugs that have at least one mockup with a front image.
+     *
+     * @return string[]  Array of tip slugs.
+     */
+    public static function get_tips_with_mockups() {
+        global $wpdb;
+        return $wpdb->get_col(
+            'SELECT DISTINCT tip_slug FROM ' . self::table() . ' WHERE front_image IS NOT NULL AND front_image > 0'
+        );
+    }
+
     public static function save( $tip_slug, $boja_slug, $front_image = null, $back_image = null ) {
         global $wpdb;
         $now      = current_time( 'mysql' );

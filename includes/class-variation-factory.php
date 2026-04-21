@@ -339,17 +339,86 @@ class Thready_Variation_Factory {
 
         update_post_meta( $product_id, self::META_TIP_POSITIONS, wp_json_encode( $tip_positions ) );
 
+        // Rebuild product attributes to match only the active variations.
+        // This removes stale color/type terms that were deactivated.
+        self::rebuild_product_attributes( $product_id );
+
         WC_Product_Variable::sync( $product_id );
         wc_delete_product_transients( $product_id );
 
         return $counters;
     }
 
+    /**
+     * Rebuild the product's pa_tip-proizvoda and pa_boja attributes
+     * from active (non-trashed, in-stock) variations only.
+     *
+     * Removes stale terms that no longer have active variations,
+     * updates WC attribute options, and cleans up term relationships.
+     */
+    public static function rebuild_product_attributes( $product_id ) {
+        global $wpdb;
+
+        $tip_key  = 'attribute_' . THREADY_TAX_TIP;
+        $boja_key = 'attribute_' . THREADY_TAX_BOJA;
+
+        // Get all active tip + boja slugs from non-trashed, instock variations
+        $rows = $wpdb->get_results( $wpdb->prepare( "
+            SELECT MAX( CASE WHEN pm.meta_key = %s THEN pm.meta_value END ) AS tip,
+                   MAX( CASE WHEN pm.meta_key = %s THEN pm.meta_value END ) AS boja
+            FROM   {$wpdb->posts} p
+            JOIN   {$wpdb->postmeta} pm  ON pm.post_id = p.ID
+            JOIN   {$wpdb->postmeta} pm2 ON pm2.post_id = p.ID
+            WHERE  p.post_parent = %d
+            AND    p.post_type   = 'product_variation'
+            AND    p.post_status != 'trash'
+            AND    pm2.meta_key  = '_stock_status'
+            AND    pm2.meta_value = 'instock'
+            GROUP  BY p.ID
+        ", $tip_key, $boja_key, $product_id ) );
+
+        $active_tips  = [];
+        $active_bojas = [];
+        foreach ( $rows as $row ) {
+            if ( $row->tip )  $active_tips[]  = $row->tip;
+            if ( $row->boja ) $active_bojas[] = $row->boja;
+        }
+        $active_tips  = array_values( array_unique( $active_tips ) );
+        $active_bojas = array_values( array_unique( $active_bojas ) );
+
+        $product = wc_get_product( $product_id );
+        if ( ! $product ) return;
+
+        $attributes = $product->get_attributes();
+
+        foreach ( [ THREADY_TAX_TIP => $active_tips, THREADY_TAX_BOJA => $active_bojas ] as $taxonomy => $active_slugs ) {
+            if ( ! isset( $attributes[ $taxonomy ] ) ) continue;
+
+            // Resolve slugs to term IDs
+            $term_ids = [];
+            foreach ( $active_slugs as $slug ) {
+                $term = get_term_by( 'slug', $slug, $taxonomy );
+                if ( $term ) $term_ids[] = $term->term_id;
+            }
+
+            // Update WC attribute options
+            $attr = $attributes[ $taxonomy ];
+            $attr->set_options( $term_ids );
+            $attributes[ $taxonomy ] = $attr;
+
+            // Update term relationships
+            wp_set_object_terms( $product_id, $term_ids, $taxonomy );
+        }
+
+        $product->set_attributes( $attributes );
+        $product->save();
+    }
+
     // -------------------------------------------------------------------------
     // add / remove color
     // -------------------------------------------------------------------------
 
-    public static function add_color( $product_id, $tip_slug, $boja_slug, $light_print = false ) {
+    public static function add_color( $product_id, $tip_slug, $boja_slug, $light_print = false, $overrides = [] ) {
         $tip_slug  = sanitize_title( $tip_slug );
         $boja_slug = sanitize_title( $boja_slug );
 
@@ -357,19 +426,44 @@ class Thready_Variation_Factory {
             return new WP_Error( 'thready_invalid_term', "Color $boja_slug not found." );
         }
 
-        $prices    = self::get_tip_prices( $product_id );
-        $sizes_csv = self::get_sizes_csv_for_tip( $product_id, $tip_slug );
-        $price     = $prices[ $tip_slug ] ?? [ 'regular' => 0, 'sale' => null ];
-        $regular   = (float) ( $price['regular'] ?? 0 );
-        $sale      = $price['sale'] ?? null;
+        // Use overrides if provided (for new types not yet on the product),
+        // otherwise inherit from existing variations of the same type.
+        if ( ! empty( $overrides['regular'] ) ) {
+            $regular   = (float) $overrides['regular'];
+            $sale      = isset( $overrides['sale'] ) && $overrides['sale'] !== '' && $overrides['sale'] !== null
+                       ? (float) $overrides['sale'] : null;
+        } else {
+            $prices  = self::get_tip_prices( $product_id );
+            $price   = $prices[ $tip_slug ] ?? [ 'regular' => 0, 'sale' => null ];
+            $regular = (float) ( $price['regular'] ?? 0 );
+            $sale    = $price['sale'] ?? null;
+        }
 
-        self::ensure_attributes_include( $product_id, [], [ $boja_slug ] );
+        if ( ! empty( $overrides['sizes_csv'] ) ) {
+            $sizes_csv = sanitize_text_field( $overrides['sizes_csv'] );
+        } else {
+            $sizes_csv = self::get_sizes_csv_for_tip( $product_id, $tip_slug );
+        }
+
+        // Update product attributes to include the new tip + color
+        self::ensure_attributes_include( $product_id, [ $tip_slug ], [ $boja_slug ] );
+
+        // Also explicitly set term relationships
+        $tip_term = get_term_by( 'slug', $tip_slug, THREADY_TAX_TIP );
+        if ( $tip_term ) {
+            wp_set_object_terms( $product_id, $tip_term->term_id, THREADY_TAX_TIP, true );
+        }
+        $boja_term = get_term_by( 'slug', $boja_slug, THREADY_TAX_BOJA );
+        if ( $boja_term ) {
+            wp_set_object_terms( $product_id, $boja_term->term_id, THREADY_TAX_BOJA, true );
+        }
+
         $var_id = self::insert_one( $product_id, $tip_slug, $boja_slug, $regular, $sale, $sizes_csv, $light_print, current_time( 'mysql' ) );
 
         if ( $var_id ) {
             WC_Product_Variable::sync( $product_id );
             wc_delete_product_transients( $product_id );
-            return [ 'created' => 1 ];
+            return [ 'created' => 1, 'variation_id' => $var_id ];
         }
         return new WP_Error( 'thready_insert_failed', 'Could not create variation.' );
     }
@@ -640,6 +734,74 @@ class Thready_Variation_Factory {
     }
 
     /**
+     * Generate thumbnails for a SINGLE variation (front + optional back).
+     * Used by Quick Add Color to avoid regenerating all variations.
+     *
+     * @param  int $product_id   Parent product ID.
+     * @param  int $variation_id Variation ID.
+     * @return bool True on success.
+     */
+    public static function generate_single_variation_thumbnail( $product_id, $variation_id ) {
+        $tip_slug  = (string) get_post_meta( $variation_id, 'attribute_' . THREADY_TAX_TIP,  true );
+        $boja_slug = (string) get_post_meta( $variation_id, 'attribute_' . THREADY_TAX_BOJA, true );
+        if ( ! $tip_slug || ! $boja_slug ) return false;
+
+        $mockup = Thready_Mockup_Library::get_urls( $tip_slug, $boja_slug );
+        if ( ! $mockup || ! $mockup['front'] ) return false;
+
+        $positions_raw  = get_post_meta( $product_id, self::META_TIP_POSITIONS, true );
+        $tip_positions  = $positions_raw ? json_decode( $positions_raw, true ) : [];
+        $front_print_id = (int) get_post_meta( $product_id, self::META_PRINT_FRONT, true );
+        $light_print_id = (int) get_post_meta( $product_id, self::META_PRINT_LIGHT, true );
+        $back_print_id  = (int) get_post_meta( $product_id, self::META_PRINT_BACK,  true );
+
+        $use_light = get_post_meta( $variation_id, '_thready_use_light_print', true ) === 'yes';
+        $print_id  = ( $use_light && $light_print_id ) ? $light_print_id : $front_print_id;
+        if ( ! $print_id ) return false;
+
+        $pos_front = $tip_positions[ $tip_slug ]['front'] ?? [ 'x' => 50, 'y' => 25, 'width' => 50 ];
+
+        // Generate front thumbnail
+        $front_attach = Thready_Image_Handler::generate_merged_image(
+            $product_id, $variation_id,
+            [ 'print_x' => $pos_front['x'], 'print_y' => $pos_front['y'],
+              'print_width' => $pos_front['width'], 'base_image' => $mockup['front'] ],
+            $print_id, 'front', 150
+        );
+
+        // Generate back thumbnail
+        $back_attach = null;
+        if ( $back_print_id && ! empty( $mockup['back'] ) ) {
+            $pos_back = $tip_positions[ $tip_slug ]['back'] ?? [ 'x' => 50, 'y' => 25, 'width' => 50 ];
+            $back_attach = Thready_Image_Handler::generate_merged_image(
+                $product_id, $variation_id,
+                [ 'print_x' => $pos_back['x'], 'print_y' => $pos_back['y'],
+                  'print_width' => $pos_back['width'], 'base_image' => $mockup['back'] ],
+                $back_print_id, 'back', 150
+            );
+            if ( $back_attach && ! is_wp_error( $back_attach ) ) {
+                update_post_meta( $variation_id, '_thready_back_thumb_id', $back_attach );
+            } else {
+                $back_attach = null;
+            }
+        }
+
+        // Save front + back in one call
+        $var = wc_get_product( $variation_id );
+        if ( $var ) {
+            if ( $front_attach && ! is_wp_error( $front_attach ) ) {
+                $var->set_image_id( $front_attach );
+            }
+            if ( $back_attach ) {
+                $var->set_gallery_image_ids( [ $back_attach ] );
+            }
+            $var->save();
+        }
+
+        return true;
+    }
+
+    /**
      * Generate an 800×800 merged image for a specific tip+boja+side combination.
      * Used as the product featured image.
      *
@@ -731,7 +893,7 @@ class Thready_Variation_Factory {
         return $attrs;
     }
 
-    private static function ensure_attributes_include( $product_id, array $new_tips, array $new_bojas ) {
+    public static function ensure_attributes_include( $product_id, array $new_tips, array $new_bojas ) {
         $product = wc_get_product( $product_id );
         if ( ! $product ) return;
 
@@ -960,7 +1122,7 @@ class Thready_Variation_Factory {
         return $result;
     }
 
-    private static function get_tip_prices( $product_id ) {
+    public static function get_tip_prices( $product_id ) {
         global $wpdb;
         $tip_key = 'attribute_' . THREADY_TAX_TIP;
 
@@ -985,7 +1147,7 @@ class Thready_Variation_Factory {
         return $prices;
     }
 
-    private static function get_sizes_csv_for_tip( $product_id, $tip_slug ) {
+    public static function get_sizes_csv_for_tip( $product_id, $tip_slug ) {
         global $wpdb;
         $tip_key = 'attribute_' . THREADY_TAX_TIP;
         return (string) $wpdb->get_var( $wpdb->prepare( "

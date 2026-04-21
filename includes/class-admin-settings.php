@@ -20,6 +20,13 @@ class Thready_Admin_Settings {
     
     public static function add_print_image_field() {
         global $post;
+
+        // Canvas products created via wizard manage print images through
+        // the wizard — hide these fields to avoid confusion.
+        if ( get_post_meta( $post->ID, '_thready_render_mode', true ) === 'canvas' ) {
+            return;
+        }
+
         $print_image_id = get_post_meta($post->ID, '_thready_print_image', true);
         $light_print_image_id = get_post_meta($post->ID, '_thready_light_print_image', true);
         $back_print_image_id = get_post_meta($post->ID, '_thready_back_print_image', true);
@@ -265,6 +272,13 @@ class Thready_Admin_Settings {
     
     public static function add_variation_settings_fields($loop, $variation_data, $variation) {
         $parent_id = $variation->post_parent;
+
+        // Canvas products manage print settings via the wizard — hide
+        // Front/Back Print Settings per variation to avoid conflicts.
+        if ( get_post_meta( $parent_id, '_thready_render_mode', true ) === 'canvas' ) {
+            return;
+        }
+
         $print_image_id = get_post_meta($parent_id, '_thready_print_image', true);
         $light_print_image_id = get_post_meta($parent_id, '_thready_light_print_image', true);
         $back_print_image_id = get_post_meta($parent_id, '_thready_back_print_image', true);
