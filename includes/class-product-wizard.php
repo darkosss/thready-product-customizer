@@ -136,6 +136,41 @@ class Thready_Product_Wizard {
             }
         }
 
+        // Product categories (hierarchical)
+        $product_cats = get_terms( [
+            'taxonomy'   => 'product_cat',
+            'hide_empty' => false,
+            'orderby'    => 'name',
+        ] );
+        $categories = [];
+        if ( ! is_wp_error( $product_cats ) ) {
+            foreach ( $product_cats as $cat ) {
+                $categories[] = [
+                    'id'     => $cat->term_id,
+                    'name'   => $cat->name,
+                    'parent' => $cat->parent,
+                    'slug'   => $cat->slug,
+                ];
+            }
+        }
+
+        // Product tags
+        $product_tags = get_terms( [
+            'taxonomy'   => 'product_tag',
+            'hide_empty' => false,
+            'orderby'    => 'name',
+        ] );
+        $tags = [];
+        if ( ! is_wp_error( $product_tags ) ) {
+            foreach ( $product_tags as $tag ) {
+                $tags[] = [
+                    'id'   => $tag->term_id,
+                    'name' => $tag->name,
+                    'slug' => $tag->slug,
+                ];
+            }
+        }
+
         // Edit mode pre-fill
         $edit_data = null;
         if ( ! empty( $_GET['product_id'] ) ) {
@@ -150,6 +185,8 @@ class Thready_Product_Wizard {
             'bojas'          => $bojas,
             'velicinas'      => $velicinas,
             'mockup_map'     => $mockup_map,
+            'categories'     => $categories,
+            'tags'           => $tags,
             'edit_data'      => $edit_data,
             'products_url'   => admin_url( 'edit.php?post_type=product' ),
             'mockup_lib_url' => admin_url( 'admin.php?page=thready-mockup-library' ),
@@ -174,23 +211,31 @@ class Thready_Product_Wizard {
         $print_back_id  = $summary['print_back']  ?: 0;
 
         return [
-            'product_id'       => $product_id,
-            'product_name'     => $product->get_name(),
-            'tips'             => $summary['tips'],
-            'tip_colors'       => $summary['tip_colors'],
-            'tip_sizes'        => $summary['tip_sizes'],
-            'tip_prices'       => $summary['tip_prices'],
-            'tip_positions'    => $summary['tip_positions'],
-            'print_front_id'   => $print_front_id,
-            'print_front_url'  => $print_front_id ? wp_get_attachment_url( $print_front_id ) : '',
-            'print_front_thumb'=> $print_front_id ? ( wp_get_attachment_image_url( $print_front_id, 'thumbnail' ) ?: '' ) : '',
-            'print_light_id'   => $print_light_id,
-            'print_light_url'  => $print_light_id ? wp_get_attachment_url( $print_light_id ) : '',
-            'print_light_thumb'=> $print_light_id ? ( wp_get_attachment_image_url( $print_light_id, 'thumbnail' ) ?: '' ) : '',
-            'print_back_id'    => $print_back_id,
-            'print_back_url'   => $print_back_id ? wp_get_attachment_url( $print_back_id ) : '',
-            'print_back_thumb' => $print_back_id ? ( wp_get_attachment_image_url( $print_back_id, 'thumbnail' ) ?: '' ) : '',
-            'render_mode'      => $summary['render_mode'],
+            'product_id'        => $product_id,
+            'product_name'      => $product->get_name(),
+            'sku'               => $product->get_sku(),
+            'short_description' => $product->get_short_description(),
+            'category_ids'      => $product->get_category_ids(),
+            'tag_ids'           => $product->get_tag_ids(),
+            'tag_names'         => array_map( function( $id ) {
+                $term = get_term( $id, 'product_tag' );
+                return $term && ! is_wp_error( $term ) ? $term->name : '';
+            }, $product->get_tag_ids() ),
+            'tips'              => $summary['tips'],
+            'tip_colors'        => $summary['tip_colors'],
+            'tip_sizes'         => $summary['tip_sizes'],
+            'tip_prices'        => $summary['tip_prices'],
+            'tip_positions'     => $summary['tip_positions'],
+            'print_front_id'    => $print_front_id,
+            'print_front_url'   => $print_front_id ? wp_get_attachment_url( $print_front_id ) : '',
+            'print_front_thumb' => $print_front_id ? ( wp_get_attachment_image_url( $print_front_id, 'thumbnail' ) ?: '' ) : '',
+            'print_light_id'    => $print_light_id,
+            'print_light_url'   => $print_light_id ? wp_get_attachment_url( $print_light_id ) : '',
+            'print_light_thumb' => $print_light_id ? ( wp_get_attachment_image_url( $print_light_id, 'thumbnail' ) ?: '' ) : '',
+            'print_back_id'     => $print_back_id,
+            'print_back_url'    => $print_back_id ? wp_get_attachment_url( $print_back_id ) : '',
+            'print_back_thumb'  => $print_back_id ? ( wp_get_attachment_image_url( $print_back_id, 'thumbnail' ) ?: '' ) : '',
+            'render_mode'       => $summary['render_mode'],
         ];
     }
 
@@ -224,11 +269,13 @@ class Thready_Product_Wizard {
                     <ol class="wizard-steps" id="wizard-steps">
                         <?php
                         $labels = [
-                            __( 'Type',    'thready-product-customizer' ),
+                            __( 'Info',    'thready-product-customizer' ),
+                            __( 'Print',   'thready-product-customizer' ),
                             __( 'Colors',  'thready-product-customizer' ),
                             __( 'Pricing', 'thready-product-customizer' ),
                             __( 'Sizes',   'thready-product-customizer' ),
                             __( 'Design',  'thready-product-customizer' ),
+                            __( 'Image',   'thready-product-customizer' ),
                             __( 'Review',  'thready-product-customizer' ),
                         ];
                         foreach ( $labels as $i => $label ) : ?>
@@ -313,12 +360,45 @@ class Thready_Product_Wizard {
                 wp_send_json_error( [ 'message' => 'Product not found or not variable.' ] );
             }
 
-            // Update product name
+            // Update product fields
+            $changed = false;
             $new_name = sanitize_text_field( $raw['name'] ?? '' );
             if ( $new_name && $new_name !== $existing->get_name() ) {
                 $existing->set_name( $new_name );
-                $existing->save();
+                $changed = true;
             }
+
+            $new_sku = sanitize_text_field( $raw['sku'] ?? '' );
+            if ( $new_sku !== $existing->get_sku() ) {
+                $existing->set_sku( $new_sku );
+                $changed = true;
+            }
+
+            $new_short = wp_kses_post( $raw['short_description'] ?? '' );
+            $existing->set_short_description( $new_short );
+
+            if ( isset( $raw['category_ids'] ) ) {
+                $existing->set_category_ids( array_map( 'absint', (array) $raw['category_ids'] ) );
+            }
+            if ( ! empty( $raw['tag_names'] ) ) {
+                $tag_ids = [];
+                foreach ( (array) $raw['tag_names'] as $name ) {
+                    $name = sanitize_text_field( $name );
+                    if ( ! $name ) continue;
+                    $term = get_term_by( 'name', $name, 'product_tag' );
+                    if ( $term ) {
+                        $tag_ids[] = $term->term_id;
+                    } else {
+                        $new_term = wp_insert_term( $name, 'product_tag' );
+                        if ( ! is_wp_error( $new_term ) ) {
+                            $tag_ids[] = $new_term['term_id'];
+                        }
+                    }
+                }
+                $existing->set_tag_ids( $tag_ids );
+            }
+
+            $existing->save();
 
             // Update print images
             update_post_meta( $edit_product_id, Thready_Variation_Factory::META_PRINT_FRONT, absint( $raw['print_front_id'] ?? 0 ) );
@@ -389,6 +469,10 @@ class Thready_Product_Wizard {
             // ── CREATE MODE: new product ────────────────────────────────
             $product_id = Thready_Variation_Factory::create_product( [
                 'name'               => sanitize_text_field( $raw['name']           ?? '' ),
+                'sku'                => sanitize_text_field( $raw['sku']            ?? '' ),
+                'short_description'  => wp_kses_post( $raw['short_description']    ?? '' ),
+                'category_ids'       => array_map( 'absint', (array) ( $raw['category_ids'] ?? [] ) ),
+                'tag_names'          => array_map( 'sanitize_text_field', (array) ( $raw['tag_names'] ?? [] ) ),
                 'tip_slugs'          => array_map( 'sanitize_title', $raw['tip_slugs'] ?? [] ),
                 'tip_colors'         => $tip_colors,
                 'tip_sizes'          => $tip_sizes,

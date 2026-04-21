@@ -22,6 +22,10 @@
     // ── State ─────────────────────────────────────────────────────────────────
     var S = {
         name         : '',
+        sku          : '',
+        shortDesc    : '',
+        categoryIds  : [],
+        tagIds       : [],
         tipSlugs     : [],
         printFrontId : 0, printFrontUrl : '', printFrontThumb : '',
         printLightId : 0, printLightUrl : '', printLightThumb : '',
@@ -40,10 +44,23 @@
     // Pre-fill from edit mode
     if ( d.edit_data ) {
         var ed       = d.edit_data;
-        S.name        = ed.product_name   || '';
-        S.tipSlugs    = ed.tips           || [];
-        S.tipPrices   = ed.tip_prices     || {};
-        S.tipPositions = ed.tip_positions || {};
+        S.name        = ed.product_name      || '';
+        S.sku         = ed.sku               || '';
+        S.shortDesc   = ed.short_description || '';
+        S.categoryIds = ed.category_ids      || [];
+        S.tagIds      = ed.tag_ids           || [];
+        // Ensure tag names from edit data are in d.tags so chips render correctly
+        if ( ed.tag_names && ed.tag_ids ) {
+            ed.tag_ids.forEach( function ( id, i ) {
+                var name = ed.tag_names[ i ] || '';
+                if ( name && ! ( d.tags || [] ).find( function ( t ) { return t.id === id; } ) ) {
+                    d.tags.push( { id: id, name: name, slug: name.toLowerCase().replace( /\s+/g, '-' ) } );
+                }
+            } );
+        }
+        S.tipSlugs    = ed.tips              || [];
+        S.tipPrices   = ed.tip_prices        || {};
+        S.tipPositions = ed.tip_positions    || {};
         S.printFrontId    = ed.print_front_id    || 0;
         S.printFrontUrl   = ed.print_front_url   || '';
         S.printFrontThumb = ed.print_front_thumb || '';
@@ -69,7 +86,10 @@
     // ── Dynamic step definitions ──────────────────────────────────────────────
 
     function buildDynamicSteps() {
-        var steps = [ { id: 'setup', type: 'setup', label: 'Setup', sublabel: '' } ];
+        var steps = [
+            { id: 'product_info',  type: 'product_info',  label: 'Info',  sublabel: '' },
+            { id: 'print_images', type: 'print_images', label: 'Print', sublabel: '' },
+        ];
 
         // One step per type — colors + sizes merged
         S.tipSlugs.forEach( function ( t ) {
@@ -126,9 +146,10 @@
 
         // Render step content
         switch ( step.type ) {
-            case 'setup':       renderSetup();                                  break;
-            case 'type_config': renderTypeConfig( step.tipSlug, step.tipName ); break;
-            case 'pricing':     renderPricing();                                break;
+            case 'product_info':  renderProductInfo();                            break;
+            case 'print_images':  renderPrintImages();                           break;
+            case 'type_config':   renderTypeConfig( step.tipSlug, step.tipName ); break;
+            case 'pricing':       renderPricing();                                break;
             case 'positioning':   renderPositioning();   break;
             case 'product_image': renderProductImage();  break;
             case 'review':        renderReview();        break;
@@ -161,14 +182,24 @@
 
         switch ( step.type ) {
 
-            case 'setup':
+            case 'product_info':
                 S.name     = $( '#wiz-name' ).val().trim();
+                S.sku      = $( '#wiz-sku' ).val().trim();
+                S.shortDesc = $( '#wiz-short-desc' ).val().trim();
+
+                // Collect categories
+                S.categoryIds = [];
+                $( '.wiz-cat-cb:checked' ).each( function () {
+                    S.categoryIds.push( parseInt( $( this ).val(), 10 ) );
+                } );
+
+                // Tags are already tracked live in S.tagIds via addTagByName/removeTag
+
                 S.tipSlugs = [];
                 $( '.tip-cb:checked' ).each( function () { S.tipSlugs.push( $( this ).val() ); } );
 
                 if ( ! S.name )            return err( 'Enter a product name.' );
                 if ( ! S.tipSlugs.length )  return err( 'Select at least one product type.' );
-                if ( ! S.printFrontId )     return err( 'Upload or select a front print image.' );
 
                 // Init per-type state for any newly selected types
                 S.tipSlugs.forEach( function ( t ) {
@@ -180,6 +211,10 @@
 
                 buildDynamicSteps();
                 rebuildStepIndicator();
+                return true;
+
+            case 'print_images':
+                if ( ! S.printFrontId ) return err( 'Upload or select a front print image.' );
                 return true;
 
             case 'type_config': {
@@ -266,17 +301,51 @@
         } );
     }
 
-    // ── SETUP (Step 1) ────────────────────────────────────────────────────────
+    // ── PRODUCT INFO (Step 1) ─────────────────────────────────────────────────
 
-    function renderSetup() {
+    function renderProductInfo() {
         var h = '<div class="wizard-step">';
-        h += '<h2 class="step-title">Setup</h2>';
+        h += '<h2 class="step-title">Product Info</h2>';
 
         // Product name
         h += '<div class="wiz-field">';
         h += '<label class="wiz-label" for="wiz-name">Product Name <span class="req">*</span></label>';
-        h += '<input type="text" id="wiz-name" class="regular-text" value="' + esc( S.name ) + '" placeholder="e.g. Zmaj, Akira, Rose Pattern…">';
+        h += '<input type="text" id="wiz-name" class="regular-text" value="' + esc( S.name ) + '" placeholder="Product name">';
         h += '</div>';
+
+        // SKU
+        h += '<div class="wiz-field">';
+        h += '<label class="wiz-label" for="wiz-sku">SKU <span style="font-weight:400;color:#646970">(optional)</span></label>';
+        h += '<input type="text" id="wiz-sku" class="regular-text" value="' + esc( S.sku ) + '" placeholder="e.g. THR-001">';
+        h += '</div>';
+
+        // Short description
+        h += '<div class="wiz-field">';
+        h += '<label class="wiz-label" for="wiz-short-desc">Short Description <span style="font-weight:400;color:#646970">(optional)</span></label>';
+        h += '<textarea id="wiz-short-desc" class="regular-text" rows="3" placeholder="Brief product description for archives and search results">' + esc( S.shortDesc ) + '</textarea>';
+        h += '</div>';
+
+        // Categories
+        h += '<div class="wiz-field">';
+        h += '<label class="wiz-label">Categories <span style="font-weight:400;color:#646970">(optional)</span></label>';
+        h += '<div class="wiz-cat-tree">';
+        h += buildCategoryTree( d.categories || [], 0 );
+        h += '</div></div>';
+
+        // Tags — WP-style input with suggestions
+        h += '<div class="wiz-field">';
+        h += '<label class="wiz-label">Tags <span style="font-weight:400;color:#646970">(optional)</span></label>';
+        h += '<div class="wiz-tag-box">';
+        h += '<div class="wiz-tag-input-row">';
+        h += '<input type="text" id="wiz-tag-input" class="regular-text" placeholder="Add a tag…" autocomplete="off">';
+        h += '<button type="button" class="button" id="wiz-tag-add">Add</button>';
+        h += '</div>';
+        h += '<p class="wiz-tag-hint">Separate tags with commas</p>';
+        h += '<div id="wiz-tag-chips" class="wiz-tag-chips"></div>';
+        h += '<div id="wiz-tag-suggest" class="wiz-tag-suggest" style="display:none;"></div>';
+        h += '<a href="#" id="wiz-tag-popular" class="wiz-tag-popular-link">Choose from the most used tags</a>';
+        h += '<div id="wiz-tag-popular-list" class="wiz-tag-popular-list" style="display:none;"></div>';
+        h += '</div></div>';
 
         // Product types
         h += '<div class="wiz-field">';
@@ -292,9 +361,154 @@
         } );
         h += '</div></div>';
 
-        // Print images
-        h += '<div class="wiz-field">';
-        h += '<label class="wiz-label">Print Images</label>';
+        h += '</div>';
+        $body.html( h );
+
+        // Bind events
+        $body.on( 'change.wiz', '.tip-cb', function () {
+            $( this ).closest( '.wiz-check-card' ).toggleClass( 'is-checked', this.checked );
+        } );
+
+        // ── Tag input system ─────────────────────────────────────
+        renderTagChips();
+
+        // Add tag(s) from input
+        function addTagsFromInput() {
+            var raw = $( '#wiz-tag-input' ).val();
+            if ( ! raw ) return;
+            raw.split( ',' ).forEach( function ( part ) {
+                var name = part.trim();
+                if ( ! name ) return;
+                addTagByName( name );
+            } );
+            $( '#wiz-tag-input' ).val( '' );
+            $( '#wiz-tag-suggest' ).hide().empty();
+        }
+
+        function addTagByName( name ) {
+            // Find existing tag by name (case-insensitive)
+            var existing = ( d.tags || [] ).find( function ( t ) {
+                return t.name.toLowerCase() === name.toLowerCase();
+            } );
+            var tagId;
+            if ( existing ) {
+                tagId = existing.id;
+            } else {
+                // Create a temporary negative ID for new tags — PHP will create the term
+                tagId = -( Date.now() + Math.floor( Math.random() * 1000 ) );
+                d.tags.push( { id: tagId, name: name, slug: name.toLowerCase().replace( /\s+/g, '-' ) } );
+            }
+            if ( S.tagIds.indexOf( tagId ) === -1 ) {
+                S.tagIds.push( tagId );
+                renderTagChips();
+            }
+        }
+
+        function removeTag( tagId ) {
+            S.tagIds = S.tagIds.filter( function ( id ) { return id !== tagId; } );
+            renderTagChips();
+        }
+
+        function renderTagChips() {
+            var $chips = $( '#wiz-tag-chips' );
+            $chips.empty();
+            S.tagIds.forEach( function ( id ) {
+                var tag = ( d.tags || [] ).find( function ( t ) { return t.id === id; } );
+                if ( ! tag ) return;
+                var $chip = $( '<span class="wiz-tag-chip">'
+                    + '<span class="wiz-tag-chip-name">' + esc( tag.name ) + '</span>'
+                    + '<button type="button" class="wiz-tag-chip-x" data-id="' + id + '">×</button>'
+                    + '</span>' );
+                $chips.append( $chip );
+            } );
+        }
+
+        $body.on( 'click.wiz', '#wiz-tag-add', addTagsFromInput );
+        $body.on( 'keydown.wiz', '#wiz-tag-input', function ( e ) {
+            if ( e.key === 'Enter' || e.key === ',' ) {
+                e.preventDefault();
+                addTagsFromInput();
+            }
+        } );
+        $body.on( 'click.wiz', '.wiz-tag-chip-x', function () {
+            removeTag( parseInt( $( this ).data( 'id' ), 10 ) || $( this ).data( 'id' ) );
+        } );
+
+        // Autocomplete suggestions
+        $body.on( 'input.wiz', '#wiz-tag-input', function () {
+            var q = $( this ).val().split( ',' ).pop().trim().toLowerCase();
+            var $suggest = $( '#wiz-tag-suggest' );
+            if ( q.length < 2 ) { $suggest.hide().empty(); return; }
+
+            var matches = ( d.tags || [] ).filter( function ( t ) {
+                return t.name.toLowerCase().indexOf( q ) !== -1 && S.tagIds.indexOf( t.id ) === -1;
+            } ).slice( 0, 10 );
+
+            if ( ! matches.length ) { $suggest.hide().empty(); return; }
+
+            var sh = '';
+            matches.forEach( function ( t ) {
+                sh += '<a href="#" class="wiz-tag-suggest-item" data-name="' + esc( t.name ) + '">' + esc( t.name ) + '</a>';
+            } );
+            $suggest.html( sh ).show();
+        } );
+
+        $body.on( 'click.wiz', '.wiz-tag-suggest-item', function ( e ) {
+            e.preventDefault();
+            addTagByName( $( this ).data( 'name' ) );
+            $( '#wiz-tag-input' ).val( '' );
+            $( '#wiz-tag-suggest' ).hide().empty();
+        } );
+
+        // Popular tags
+        $body.on( 'click.wiz', '#wiz-tag-popular', function ( e ) {
+            e.preventDefault();
+            var $list = $( '#wiz-tag-popular-list' );
+            if ( $list.is( ':visible' ) ) { $list.hide(); return; }
+
+            // Show top 20 tags (by name, since we don't have counts)
+            var popular = ( d.tags || [] ).slice( 0, 20 );
+            var ph = '';
+            popular.forEach( function ( t ) {
+                ph += '<a href="#" class="wiz-tag-popular-item" data-name="' + esc( t.name ) + '">' + esc( t.name ) + '</a>';
+            } );
+            $list.html( ph ).show();
+        } );
+
+        $body.on( 'click.wiz', '.wiz-tag-popular-item', function ( e ) {
+            e.preventDefault();
+            addTagByName( $( this ).data( 'name' ) );
+        } );
+
+        setTimeout( function () { $( '#wiz-name' ).focus(); }, 50 );
+    }
+
+    function buildCategoryTree( categories, parentId ) {
+        var children = categories.filter( function ( c ) { return c.parent === parentId; } );
+        if ( ! children.length ) return '';
+
+        var h = '<ul class="wiz-cat-ul' + ( parentId === 0 ? ' wiz-cat-root' : '' ) + '">';
+        children.forEach( function ( cat ) {
+            var chk = S.categoryIds.indexOf( cat.id ) !== -1;
+            h += '<li>';
+            h += '<label class="wiz-cat-label">';
+            h += '<input type="checkbox" class="wiz-cat-cb" value="' + cat.id + '" ' + ( chk ? 'checked' : '' ) + '>';
+            h += ' ' + esc( cat.name );
+            h += '</label>';
+            h += buildCategoryTree( categories, cat.id );
+            h += '</li>';
+        } );
+        h += '</ul>';
+        return h;
+    }
+
+    // ── PRINT IMAGES (Step 2) ─────────────────────────────────────────────────
+
+    function renderPrintImages() {
+        var h = '<div class="wizard-step">';
+        h += '<h2 class="step-title">Print Images</h2>';
+        h += '<p class="step-subtitle">Upload or select the print design images. These are overlaid on the mockup base images.</p>';
+
         h += '<div class="wiz-print-uploads">';
         h += buildPrintUploadRow( 'front', S.printFrontId, S.printFrontThumb,
             'Print Design Image <span class="req">*</span>',
@@ -305,28 +519,18 @@
         h += buildPrintUploadRow( 'back', S.printBackId, S.printBackThumb,
             'Back Print Design Image',
             'Upload a transparent PNG of the back print design (optional).' );
-        h += '</div></div>';
+        h += '</div>';
 
         h += '</div>';
         $body.html( h );
 
-        // Bind events — using .wiz namespace so $body.off('.wiz') cleans them up
-        $body.on( 'change.wiz', '.tip-cb', function () {
-            $( this ).closest( '.wiz-check-card' ).toggleClass( 'is-checked', this.checked );
-        } );
-
-        // Single button → open WP media library (handles both select + upload)
+        // Bind events
         $body.on( 'click.wiz', '.print-media-btn', function () {
             openMediaPicker( $( this ).data( 'side' ) );
         } );
-
-        // Remove
         $body.on( 'click.wiz', '.print-remove-btn', function () {
             removePrint( $( this ).data( 'side' ) );
         } );
-
-        // Focus name field
-        setTimeout( function () { $( '#wiz-name' ).focus(); }, 50 );
     }
 
     function buildPrintUploadRow( side, imgId, thumbUrl, label, description ) {
@@ -1032,6 +1236,22 @@
 
         h += '<div class="wiz-review-card">';
         h += rRow( 'Product Name',   S.name );
+        if ( S.sku ) h += rRow( 'SKU', S.sku );
+        if ( S.shortDesc ) h += rRow( 'Short Description', S.shortDesc.substring(0, 80) + ( S.shortDesc.length > 80 ? '…' : '' ) );
+        if ( S.categoryIds.length ) {
+            var catNames = S.categoryIds.map( function( id ) {
+                var cat = ( d.categories || [] ).find( function( c ) { return c.id === id; } );
+                return cat ? cat.name : id;
+            } ).join( ', ' );
+            h += rRow( 'Categories', catNames );
+        }
+        if ( S.tagIds.length ) {
+            var tagNames = S.tagIds.map( function( id ) {
+                var tag = ( d.tags || [] ).find( function( t ) { return t.id === id; } );
+                return tag ? tag.name : id;
+            } ).join( ', ' );
+            h += rRow( 'Tags', tagNames );
+        }
         h += rRow( 'Types',          S.tipSlugs.map( function(t){ return getTip(t).name; } ).join( ', ' ) );
         h += rRow( 'Total Variations', '<strong>' + totalVars + '</strong>' );
         h += rRow( 'Front Print',    S.printFrontId ? '✓ set' : '<span class="wiz-missing">⚠ missing</span>' );
@@ -1129,6 +1349,13 @@
 
         var payload = {
             name               : S.name,
+            sku                : S.sku,
+            short_description  : S.shortDesc,
+            category_ids       : S.categoryIds,
+            tag_names          : S.tagIds.map( function ( id ) {
+                var tag = ( d.tags || [] ).find( function ( t ) { return t.id === id; } );
+                return tag ? tag.name : '';
+            } ).filter( function ( n ) { return n; } ),
             tip_slugs          : S.tipSlugs,
             tip_colors         : tipColorsPayload,
             tip_sizes          : S.tipSizes,
@@ -1224,7 +1451,7 @@
 
     // ── Init ──────────────────────────────────────────────────────────────────
 
-    S.dynamicSteps = [ { id: 'setup', type: 'setup', label: 'Setup', sublabel: '' } ];
+    S.dynamicSteps = [ { id: 'product_info', type: 'product_info', label: 'Info', sublabel: '' } ];
     S.stepIndex    = 0;
     rebuildStepIndicator();
     goTo( 0 );

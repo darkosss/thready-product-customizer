@@ -990,3 +990,144 @@
     height: auto !important;
     padding: 5px 0 !important;
 }
+
+/* ── Category tree ─────────────────────────────────────────────────── */
+.wiz-cat-tree {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--wiz-border);
+    border-radius: var(--wiz-radius);
+    padding: 8px 10px;
+    background: var(--wiz-surface);
+}
+
+.wiz-cat-ul { list-style: none; margin: 0; padding: 0; }
+.wiz-cat-ul .wiz-cat-ul { padding-left: 18px; }
+
+.wiz-cat-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+/* ── Tag input (WP-style) ───────────────────────────────────────── */
+.wiz-tag-box {
+    max-width: 600px;
+}
+
+.wiz-tag-input-row {
+    display: flex;
+    gap: 6px;
+}
+
+.wiz-tag-input-row input {
+    flex: 1;
+    padding: 5px 8px;
+    border: 1px solid var(--wiz-border-dark);
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+.wiz-tag-hint {
+    font-size: 12px;
+    color: var(--wiz-muted);
+    margin: 4px 0 8px;
+}
+
+.wiz-tag-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.wiz-tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--wiz-bg);
+    border: 1px solid var(--wiz-border);
+    border-radius: 4px;
+    padding: 3px 6px 3px 10px;
+    font-size: 12px;
+}
+
+.wiz-tag-chip-x {
+    background: none;
+    border: none;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    color: var(--wiz-muted);
+    padding: 0 2px;
+}
+
+.wiz-tag-chip-x:hover {
+    color: var(--wiz-red);
+}
+
+.wiz-tag-suggest {
+    position: relative;
+    background: var(--wiz-surface);
+    border: 1px solid var(--wiz-border);
+    border-radius: 4px;
+    max-height: 160px;
+    overflow-y: auto;
+    margin-bottom: 8px;
+    box-shadow: var(--wiz-shadow);
+}
+
+.wiz-tag-suggest-item {
+    display: block;
+    padding: 6px 10px;
+    font-size: 13px;
+    text-decoration: none;
+    color: var(--wiz-text);
+}
+
+.wiz-tag-suggest-item:hover {
+    background: var(--wiz-bg);
+}
+
+.wiz-tag-popular-link {
+    font-size: 12px;
+    color: var(--wiz-accent);
+}
+
+.wiz-tag-popular-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    margin-top: 6px;
+    padding: 8px;
+    background: var(--wiz-bg);
+    border-radius: 4px;
+}
+
+.wiz-tag-popular-item {
+    font-size: 12px;
+    text-decoration: none;
+    color: var(--wiz-accent);
+}
+
+.wiz-tag-popular-item:hover {
+    text-decoration: underline;
+}
+
+/* ── Short description textarea ────────────────────────────────────── */
+#wiz-short-desc {
+    width: 100%;
+    max-width: 600px;
+    padding: 8px 10px;
+    border: 1px solid var(--wiz-border);
+    border-radius: 4px;
+    font-size: 13px;
+    resize: vertical;
+}
+
+#wiz-sku {
+    max-width: 300px;
+}

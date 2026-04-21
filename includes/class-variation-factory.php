@@ -135,6 +135,10 @@ class Thready_Variation_Factory {
     public static function create_product( array $args ) {
         $args = wp_parse_args( $args, [
             'name'               => '',
+            'sku'                => '',
+            'short_description'  => '',
+            'category_ids'       => [],
+            'tag_names'          => [],
             'tip_slugs'          => [],
             'tip_colors'         => [],
             'tip_sizes'          => [],
@@ -145,8 +149,8 @@ class Thready_Variation_Factory {
             'print_back_id'      => null,
             'description'        => '',
             'status'             => 'publish',
-            'featured_tip_slug'  => '',   // tip to use for featured image
-            'featured_boja_slug' => '',   // boja to use for featured image
+            'featured_tip_slug'  => '',
+            'featured_boja_slug' => '',
             'featured_side'      => 'front',
         ] );
 
@@ -165,7 +169,36 @@ class Thready_Variation_Factory {
         $product->set_name( sanitize_text_field( $args['name'] ) );
         $product->set_status( $args['status'] );
         $product->set_description( wp_kses_post( $args['description'] ) );
+        $product->set_short_description( wp_kses_post( $args['short_description'] ) );
         $product->set_attributes( $wc_attrs );
+
+        if ( ! empty( $args['sku'] ) ) {
+            $product->set_sku( sanitize_text_field( $args['sku'] ) );
+        }
+        if ( ! empty( $args['category_ids'] ) ) {
+            $product->set_category_ids( array_map( 'absint', $args['category_ids'] ) );
+        }
+
+        // Resolve tag names to IDs — creates new product_tag terms as needed
+        if ( ! empty( $args['tag_names'] ) ) {
+            $tag_ids = [];
+            foreach ( (array) $args['tag_names'] as $name ) {
+                $name = sanitize_text_field( $name );
+                if ( ! $name ) continue;
+                $term = get_term_by( 'name', $name, 'product_tag' );
+                if ( $term ) {
+                    $tag_ids[] = $term->term_id;
+                } else {
+                    $new_term = wp_insert_term( $name, 'product_tag' );
+                    if ( ! is_wp_error( $new_term ) ) {
+                        $tag_ids[] = $new_term['term_id'];
+                    }
+                }
+            }
+            if ( ! empty( $tag_ids ) ) {
+                $product->set_tag_ids( $tag_ids );
+            }
+        }
 
         $product_id = $product->save();
         if ( ! $product_id ) {

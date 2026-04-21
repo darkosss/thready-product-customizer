@@ -37,10 +37,15 @@ class Thready_Quick_Add_Variation {
 
         $tips_with_mockups = Thready_Mockup_Library::get_tips_with_mockups();
         $tip_data = [];
+        $tip_mockup_bojas = []; // { tip_slug: [boja_slug, ...] }
         foreach ( $tips_with_mockups as $slug ) {
             $term = get_term_by( 'slug', $slug, THREADY_TAX_TIP );
             if ( ! $term ) continue;
             $tip_data[] = [ 'slug' => $slug, 'name' => $term->name ];
+
+            // Collect which boja slugs have mockups for this tip
+            $mockups = Thready_Mockup_Library::get_for_tip( $slug );
+            $tip_mockup_bojas[ $slug ] = array_keys( $mockups );
         }
         if ( empty( $tip_data ) ) return;
 
@@ -81,6 +86,7 @@ class Thready_Quick_Add_Variation {
             'existingCombos' => array_keys( $existing_map ),
             'tipPrices'      => (object) $tip_prices,
             'tipSizes'       => (object) $tip_sizes,
+            'tipMockupBojas' => (object) $tip_mockup_bojas,
             'bojas'          => $boja_data,
             'sizes'          => $size_data,
             'hasLight'       => $has_light,
@@ -128,6 +134,7 @@ class Thready_Quick_Add_Variation {
         .qav-row.is-off:hover{background:none}
         .qav-swatch{display:inline-block;width:18px;height:18px;border-radius:50%;border:1px solid rgba(0,0,0,.15);flex-shrink:0}
         .qav-tag{font-size:10px;background:#e8e8e6;padding:1px 6px;border-radius:3px;color:#646970;margin-left:auto}
+        .qav-tag-warn{background:#fcf0e3;color:#9a6700}
 
         /* ── tabs ────────────────────────────────────────────────── */
         .qav-tabs{display:flex;gap:0;margin:14px 0 0;border-bottom:2px solid #dcdcda}
@@ -266,13 +273,17 @@ class Thready_Quick_Add_Variation {
                     panels += '<button type="button" class="button button-small qav-none" data-tip="' + slug + '">None</button>';
                     panels += '</div>';
                     panels += '<div class="qav-list">';
+                    var mockupBojas = (D.tipMockupBojas && D.tipMockupBojas[slug]) || [];
                     D.bojas.forEach(function(b) {
-                        var exists = D.existingCombos.indexOf(slug + '|' + b.slug) !== -1;
-                        panels += '<label class="qav-row qav-color-row' + (exists ? ' is-off' : '') + '" data-tip="' + slug + '" data-boja="' + b.slug + '">';
-                        panels += '<input type="checkbox" class="qav-boja-cb" data-tip="' + slug + '" value="' + b.slug + '"' + (exists ? ' disabled' : '') + '>';
+                        var exists    = D.existingCombos.indexOf(slug + '|' + b.slug) !== -1;
+                        var hasMockup = mockupBojas.indexOf(b.slug) !== -1;
+                        var isOff     = exists || !hasMockup;
+                        panels += '<label class="qav-row qav-color-row' + (isOff ? ' is-off' : '') + '" data-tip="' + slug + '" data-boja="' + b.slug + '">';
+                        panels += '<input type="checkbox" class="qav-boja-cb" data-tip="' + slug + '" value="' + b.slug + '"' + (isOff ? ' disabled' : '') + '>';
                         if (b.hex) panels += '<span class="qav-swatch" style="background:' + b.hex + '"></span>';
                         panels += '<span>' + esc(b.name) + '</span>';
                         if (exists) panels += '<span class="qav-tag">exists</span>';
+                        else if (!hasMockup) panels += '<span class="qav-tag qav-tag-warn">no mockup</span>';
                         panels += '</label>';
                     });
                     panels += '</div>';
@@ -419,13 +430,12 @@ class Thready_Quick_Add_Variation {
                     }
                 });
 
-                // Place our button in the Default Form Values toolbar,
-                // after the attribute dropdowns
-                var $defBar = $('.toolbar.toolbar-variations-defaults');
-                if ($defBar.length && !$defBar.find('.thready-qav-toolbar-btn').length) {
-                    var $btn = $('<button type="button" class="button thready-qav-toolbar-btn" style="margin-left:8px;">Quick Add Variation</button>');
+                // Place our button in the top toolbar (with Generate/Add manually)
+                var $topBar = $('.toolbar.toolbar-top');
+                if ($topBar.length && !$topBar.find('.thready-qav-toolbar-btn').length) {
+                    var $btn = $('<button type="button" class="button thready-qav-toolbar-btn">Quick Add Variation</button>');
                     $btn.on('click', function(e) { e.preventDefault(); openModal(); });
-                    $defBar.append($btn);
+                    $topBar.prepend($btn);
                 }
             }
 
